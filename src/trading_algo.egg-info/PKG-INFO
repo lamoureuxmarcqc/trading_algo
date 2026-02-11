@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: trading-algo
+Version: 1.0.0
+Summary: Système d'analyse et de prédiction boursière avec IA
+Author: Votre Nom
+Author-email: Marc Lamoureux <lamoureuxmarcqc@gmail.com>
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: black; extra == "dev"
+Requires-Dist: flake8; extra == "dev"
+Requires-Dist: pytest; extra == "dev"
+Dynamic: author
+Dynamic: requires-python

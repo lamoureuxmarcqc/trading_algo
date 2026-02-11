@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-algo"
+version = "1.0.0"
+authors = [
+    {name = "Marc Lamoureux", email = "lamoureuxmarcqc@gmail.com"},
+]
+description = "Système d'analyse et de prédiction boursière avec IA"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+dev = ["black", "flake8", "pytest"]
