@@ -25,7 +25,7 @@ print("\nEssai d'importation...")
 
 try:
     # Test 1: Import depuis data
-    from data.data_extraction import StockDataExtractor
+    from trading_algo.data.data_extraction import StockDataExtractor
     print("✅ StockDataExtractor importé")
     
     # Test 2: Vérifier si find_best_model existe

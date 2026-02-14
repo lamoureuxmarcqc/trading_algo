@@ -15,7 +15,7 @@ print("=" * 60)
 
 # Test 1: data_extraction
 try:
-    from data.data_extraction import StockDataExtractor
+    from trading_algo.data.data_extraction import StockDataExtractor
     print("✅ data_extraction importé")
     
     # Tester l'instanciation
@@ -28,7 +28,7 @@ print()
 
 # Test 2: stockmodeltrain
 try:
-    from models.stockmodeltrain import StockModelTrain
+    from trading_algo.models.stockmodeltrain import StockModelTrain
     print("✅ stockmodeltrain importé")
 except Exception as e:
     print(f"❌ stockmodeltrain: {e}")
@@ -37,7 +37,7 @@ print()
 
 # Test 3: actions_sp500
 try:
-    from screening.actions_sp500 import screen_sp500
+    from trading_algo.screening.actions_sp500 import screen_sp500
     print("✅ actions_sp500 importé")
 except Exception as e:
     print(f"❌ actions_sp500: {e}")

@@ -1,0 +1,17 @@
+{
+  "symbol": "AAPL",
+  "timestamp": "20260127_102844",
+  "training_time_seconds": 57.36779,
+  "train_samples": 785,
+  "test_samples": 152,
+  "train_loss": 0.7598569989204407,
+  "train_mae": 0.6966995000839233,
+  "val_loss": 1.1667426824569702,
+  "val_mae": 0.911980152130127,
+  "input_shape": [
+    60,
+    41
+  ],
+  "n_outputs": 16,
+  "lookback_days": 60
+}

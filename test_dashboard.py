@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Test du module dashboard
 """
@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 # Ajouter le répertoire src au chemin
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from visualization.dashboard import TradingDashboard, MiniDashboard
+from trading_algo.visualization.dashboard import TradingDashboard, MiniDashboard
 
 def create_sample_data():
     """Crée des données d'exemple pour tester le dashboard"""
@@ -181,7 +181,7 @@ def test_comparison_dashboard():
         data_dict[symbol] = create_sample_data()
     
     # Importer la fonction
-    from visualization.dashboard import create_comparison_dashboard
+    from trading_algo.visualization.dashboard import create_comparison_dashboard
     
     # Créer le dashboard de comparaison
     fig = create_comparison_dashboard(symbols, data_dict)

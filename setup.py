@@ -4,9 +4,8 @@ setup(
     name="trading-algo",
     version="1.0.0",
     author="Marc Lamoureux",
-    description="Syst�me d'analyse et de pr�diction boursi�re avec IA",
-    packages=find_packages(where="src"),
-    package_dir={"": "src"},
+    description="Système d'analyse et de prédiction boursière avec IA",
+    packages=find_packages(),   # détecte automatiquement le dossier trading_algo/
     install_requires=[
         "yfinance>=0.2.28",
         "pandas>=2.0.0",
@@ -15,11 +14,13 @@ setup(
         "python-dotenv>=1.0.0",
         "tensorflow>=2.13.0",
         "scikit-learn>=1.3.0",
+        "plotly>=5.0.0",
+        "lxml>=6.0.2",
     ],
     python_requires=">=3.8",
     entry_points={
         "console_scripts": [
-            "trading-algo=main:main",
+            "trading-algo = trading_algo.__main__:main",   # ⚠️ underscore !!!
         ],
     },
 )

@@ -1,0 +1,20 @@
+{
+  "symbol": "AAPL",
+  "timestamp": "20260213_114812",
+  "training_time_seconds": 46.693842,
+  "train_samples": 784,
+  "test_samples": 152,
+  "train_loss": 0.4044332206249237,
+  "train_mae": 0.7441690564155579,
+  "val_loss": 1.0908688306808472,
+  "val_mae": 1.5153082609176636,
+  "input_shape": [
+    60,
+    51
+  ],
+  "n_outputs": 45,
+  "lookback_days": 60,
+  "batch_size": 32,
+  "architecture": "LSTM_32_16",
+  "model_version": "1.0.0"
+}
