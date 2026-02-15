@@ -117,7 +117,55 @@ class TradingDashboard:
             self.logger.error(f"Erreur calcul score: {e}")
             self.score = 5.0
             self.recommendation = "NEUTRE ⚪"
+    def _add_summary_table(self, fig, row, col):
+        """Ajoute un tableau récapitulatif des indicateurs"""
+        # Récupérer les dernières valeurs
+        df = self.technical_data
+        last_row = df.iloc[-1] if df is not None and not df.empty else {}
     
+        # Construire les lignes du tableau
+        headers = ["Indicateur", "Valeur", "Interprétation"]
+        cells = []
+    
+        # Prix actuel
+        cells.append(["Prix actuel", f"${self.current_price:.2f}", "-"])
+    
+        # RSI
+        if 'RSI' in last_row:
+            rsi = last_row['RSI']
+            interpretation = "Surachat ⚠️" if rsi > 70 else "Survente ✅" if rsi < 30 else "Neutre ⚖️"
+            cells.append(["RSI (14)", f"{rsi:.1f}", interpretation])
+    
+        # MACD
+        if 'MACD' in last_row and 'MACD_Signal' in last_row:
+            macd = last_row['MACD']
+            signal = last_row['MACD_Signal']
+            status = "Haussier 📈" if macd > signal else "Baissier 📉"
+            cells.append(["MACD", f"{macd:.2f}", status])
+    
+        # Moyennes mobiles
+        if 'SMA_50' in last_row and 'SMA_200' in last_row:
+            sma_50 = last_row['SMA_50']
+            sma_200 = last_row['SMA_200']
+            cross = "Croisement doré ✅" if sma_50 > sma_200 else "Croisement mortel ⚠️"
+            cells.append(["SMA 50/200", f"{sma_50:.2f}/{sma_200:.2f}", cross])
+    
+        # ATR / Volatilité
+        if 'ATR' in last_row:
+            atr_pct = (last_row['ATR'] / self.current_price) * 100
+            vol_status = "Élevée ⚠️" if atr_pct > 3 else "Modérée ⚖️" if atr_pct > 1.5 else "Faible ✅"
+            cells.append(["Volatilité (ATR%)", f"{atr_pct:.1f}%", vol_status])
+    
+        # Score et recommandation
+        cells.append(["Score trading", f"{self.score}/10", self.recommendation])
+    
+        fig.add_trace(
+            go.Table(
+                header=dict(values=headers, fill_color='paleturquoise', align='left'),
+                cells=dict(values=list(zip(*cells)), fill_color='lavender', align='left')
+            ),
+            row=row, col=col
+        )    
     def create_main_dashboard(self, save_path: str = "dashboards") -> Optional[go.Figure]:
         """Crée le tableau de bord principal interactif"""
         if self.technical_data is None or self.technical_data.empty:
@@ -127,12 +175,13 @@ class TradingDashboard:
         try:
             # Créer les subplots
             fig = make_subplots(
-                rows=4, cols=3,
+                rows=5, cols=3,
                 specs=[
                     [{'type': 'scatter', 'rowspan': 2, 'colspan': 2}, None, {'type': 'indicator'}],
                     [None, None, {'type': 'indicator'}],
                     [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'bar'}],
-                    [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}]
+                    [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
+                    [{'type': 'table', 'colspan': 3}, None, None]   
                 ],
                 subplot_titles=(
                     f'{self.symbol} - Prix et Indicateurs',
@@ -175,6 +224,9 @@ class TradingDashboard:
             
             # 9. Prévisions
             self._add_predictions_chart(fig, row=4, col=3)
+            
+            # 10. Résumé
+            self._add_summary_table(fig, row=5, col=1)
             
             # Mise à jour du layout
             self._update_layout(fig)
@@ -500,12 +552,12 @@ class TradingDashboard:
         """Met à jour le layout du dashboard"""
         fig.update_layout(
             title=dict(
-                text=f'Tableau de Bord Trading - {self.symbol}',
+                text=f'Tableau de Bord Professionnel  -  {self.symbol}',
                 font=dict(size=24, color='darkblue', family="Arial, sans-serif"),
                 x=0.5,
                 y=0.98
             ),
-            height=1200,
+            height=1400,
             showlegend=True,
             template='plotly_white',
             hovermode='x unified',

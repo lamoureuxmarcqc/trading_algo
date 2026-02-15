@@ -27,6 +27,7 @@ dependencies = [
     "plotly>=5.0.0",          # <-- Ajout de plotly
     "matplotlib>=3.10.0",
     "lxml>=6.0.2",
+    "kaleido>=1.2.0",
 ]
 
 [project.optional-dependencies]

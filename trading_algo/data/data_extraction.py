@@ -465,8 +465,9 @@ class StockDataExtractor:
             if response.status_code == 200:
                 data = response.json()
                 response_data = data.get('response', {})
-                articles = response_data.get('docs', [])
-                
+                articles = response_data.get('docs')
+                if articles is None:
+                    articles = []                
                 news_data = {
                     'total_articles': len(articles),
                     'articles': [],

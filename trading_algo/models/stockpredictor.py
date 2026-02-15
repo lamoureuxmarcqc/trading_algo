@@ -164,51 +164,57 @@ class StockPredictor(StockModelTrain):
             return self._handle_prediction_error(e)
     
     def _prepare_prediction_features(self, data: pd.DataFrame, include_sentiment: bool = True) -> pd.DataFrame:
-        """Prépare les features pour la prédiction."""
         try:
-            # Utiliser la méthode de la classe parent pour les indicateurs techniques
-            # features_df = super().calculate_technical_indicators(data.copy())
-            features_df = StockDataExtractor.calculate_technical_indicators(self, data=data)
-            if features_df.empty:
-                return pd.DataFrame()
-            
-            # Ajouter des features supplémentaires spécifiques à StockPredictor
-            features_df = self._add_advanced_features(features_df)
-            
-            # Ajouter les données de sentiment si demandé
+            if self.features is None or self.features.empty:
+                logger.warning("Features non disponibles, calcul à partir des données...")
+                features_df = StockDataExtractor.calculate_technical_indicators(data.copy())
+            else:
+                features_df = self.features.copy()
+        
             if include_sentiment and hasattr(self, 'sentiment_data'):
                 features_df = self._merge_sentiment_features(features_df)
-            
-            # Normaliser
-            if hasattr(self, 'feature_scaler') and self.feature_scaler is not None:
-                feature_cols = [col for col in features_df.columns if col in self.feature_scaler.feature_names_in_]
-                if feature_cols:
-                    features_df[feature_cols] = self.feature_scaler.transform(features_df[feature_cols])
-            
-            return features_df
-            
+        
+            # Vérifier le scaler
+            if not hasattr(self.feature_scaler, 'feature_names_in_'):
+                logger.error("Scaler non entraîné")
+                return pd.DataFrame()
+        
+            expected_cols = list(self.feature_scaler.feature_names_in_)
+            missing = set(expected_cols) - set(features_df.columns)
+            if missing:
+                logger.error(f"Colonnes manquantes : {missing}")
+                return pd.DataFrame()
+        
+            features_df = features_df[expected_cols]
+        
+            # Normalisation et conversion
+            scaled = self.feature_scaler.transform(features_df)
+            if np.any(np.isnan(scaled)) or np.any(np.isinf(scaled)):
+                logger.warning("NaN/inf dans les données normalisées, remplacement par 0")
+                scaled = np.nan_to_num(scaled, nan=0.0, posinf=0.0, neginf=0.0)
+        
+            result_df = pd.DataFrame(
+                scaled.astype(np.float32),
+                index=features_df.index,
+                columns=expected_cols
+            )
+            return result_df
+        
         except Exception as e:
             logger.error(f"Erreur préparation features: {e}")
-            return pd.DataFrame()
-    
+            return pd.DataFrame() 
+        
     def _add_advanced_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Ajoute des features avancées pour la prédiction."""
         try:
             # Features de momentum avancées
             df['Momentum_Change'] = df['Close'].pct_change(periods=5)
             df['Volatility_Ratio'] = df['Close'].rolling(10).std() / df['Close'].rolling(30).std()
-            
-            # Features de volume
             df['Volume_MA_Ratio'] = df['Volume'] / df['Volume'].rolling(20).mean()
-            
-            # Features de tendance
             df['Trend_Strength'] = abs(df['Close'] - df['Close'].rolling(20).mean()) / df['Close'].rolling(20).std()
-            
-            # Remplir les NaN
-            df = df.fillna(method='ffill').fillna(method='bfill')
-            
+        
+            # ✅ Correction : remplacer fillna(method=...) par ffill().bfill()
+            df = df.ffill().bfill()
             return df
-            
         except Exception as e:
             logger.error(f"Erreur ajout features avancées: {e}")
             return df
@@ -702,56 +708,80 @@ class StockPredictor(StockModelTrain):
         Analyse avancée d'une action avec prédictions détaillées
         """
         logger.info(f"🔍 Analyse avancée de {self.symbol}")
-        
+    
         try:
             # Récupérer les données
             if not self.fetch_data():
                 return {"error": "Échec de la récupération des données"}
-            
+        
             # Entraîner le modèle si nécessaire
             if self.model is None:
                 logger.info("Entraînement du modèle...")
                 if not self.train(epochs=30, lookback_days=60):
                     return {"error": "Échec de l'entraînement"}
-            
-            # Générer les prédictions
+        
             logger.info("Génération des prédictions avancées...")
-            
+        
             # Prédictions à différents horizons
-            predictions_1d = self.predict_future(days_ahead=1)
-            predictions_5d = self.predict_future(days_ahead=5)
-            predictions_20d = self.predict_future(days_ahead=20)
-            predictions_90d = self.predict_future(days_ahead=90)
-            
-            # Calculer le score
-            self.trading_score = StockModelTrain.calculate_trading_score(predictions_90d)
-            self.recommendation = StockModelTrain.generate_recommendation(self.trading_score)
-            
+            pred_1d = self.predict_future(days_ahead=1)
+            pred_5d = self.predict_future(days_ahead=5)
+            pred_20d = self.predict_future(days_ahead=20)
+            pred_90d = self.predict_future(days_ahead=90)
+        
+            # Fonction helper pour extraire la valeur du prix prédit
+            def extract_price(pred_result, index=0):
+                if pred_result is None:
+                    return None
+                predictions_df = pred_result.get('predictions', pd.DataFrame())
+                if predictions_df.empty or 'Predicted_Close' not in predictions_df.columns:
+                    return None
+                if index < len(predictions_df):
+                    return float(predictions_df.iloc[index]['Predicted_Close'])
+                return None
+        
+            # Extraire les valeurs numériques
+            predictions_dict = {}
+            p1 = extract_price(pred_1d, 0)
+            if p1 is not None:
+                predictions_dict['1d'] = p1
+            p5 = extract_price(pred_5d, 0)
+            if p5 is not None:
+                predictions_dict['5d'] = p5
+            p20 = extract_price(pred_20d, 19)  # 20e jour (index 19)
+            if p20 is not None:
+                predictions_dict['20d'] = p20
+            p90 = extract_price(pred_90d, 89)  # 90e jour (index 89)
+            if p90 is not None:
+                predictions_dict['90d'] = p90
+        
+            # Calculer le score avec les valeurs extraites
+            self.trading_score = self.calculate_trading_score(predictions_dict)
+            self.recommendation = self.generate_recommendation(self.trading_score)
+        
             # Compiler les résultats
             results = {
                 "symbol": self.symbol,
                 "current_price": self.current_price,
                 "trading_score": self.trading_score,
                 "recommendation": self.recommendation,
-                "predictions": {
-                    "1d": predictions_1d,
-                    "5d": predictions_5d,
-                    "20d": predictions_20d,
-                    "90d": predictions_90d
+                "predictions": predictions_dict,  # Pour l'affichage
+                "detailed_predictions": {         # Objets complets si besoin
+                    "1d": pred_1d,
+                    "5d": pred_5d,
+                    "20d": pred_20d,
+                    "90d": pred_90d
                 },
                 "technical_indicators": self._get_technical_summary(),
                 "market_context": self._get_market_context(),
                 "analysis_date": datetime.now().isoformat()
             }
-            
+        
             logger.info(f"✅ Analyse avancée terminée pour {self.symbol}")
-            
             return results
-            
+        
         except Exception as e:
             logger.error(f"❌ Erreur analyse avancée: {e}", exc_info=True)
             return {"error": str(e), "symbol": self.symbol}
-    
     def _get_technical_summary(self) -> Dict:
         """Récupère un résumé des indicateurs techniques."""
         try:
@@ -776,15 +806,30 @@ class StockPredictor(StockModelTrain):
             return {}
     
     def _get_market_context(self) -> Dict:
-        """Récupère le contexte de marché."""
+        """Récupère le contexte de marché de manière robuste."""
         try:
-            context = {
-                "market_indicators": self.macro_extractor.get_market_indicators(),
-                "economic_indicators": self.macro_extractor.get_economic_indicators("US"),
-                "commodities": self.macro_extractor.get_commodity_prices()
-            }
+            context = {}
+            if hasattr(self.macro_extractor, 'get_market_indicators'):
+               # Utiliser StockDataExtractor pour les indicateurs de marché
+                market_extractor = StockDataExtractor()
+                context["market_indicators"] = market_extractor.get_market_indicators()
+            else:
+                context["market_indicators"] = {"note": "Non disponible"}
+            
+            if hasattr(self.macro_extractor, 'get_economic_indicators'):
+                context["economic_indicators"] = self.macro_extractor.get_economic_indicators("US")
+            else:
+                context["economic_indicators"] = {"note": "Non disponible"}
+            
+            if hasattr(self.macro_extractor, 'get_commodity_prices'):
+                context["commodities"] = self.macro_extractor.get_commodity_prices()
+            else:
+                context["commodities"] = {"note": "Non disponible"}
             
             return context
+        except Exception as e:
+            logger.error(f"Erreur contexte marché: {e}")
+            return {}
             
         except Exception as e:
             logger.error(f"Erreur contexte marché: {e}")
