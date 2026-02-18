@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Point d'entrée principal du système d'analyse boursière
 """
@@ -6,11 +6,11 @@ Point d'entrée principal du système d'analyse boursière
 import sys
 import os
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
+import pandas as pd
 
 
 def print_banner():
-    """Affiche la bannière du système"""
     banner = r"""
 ╔══════════════════════════════════════════════════════════════╗
 ║                SYSTÈME D'ANALYSE BOURSIÈRE AVEC IA           ║
@@ -60,13 +60,14 @@ def import_modules():
         modules['TradingDashboard'] = None
         modules['create_comparison_dashboard'] = None
     
+    # Module screening optionnel
     try:
         from trading_algo.screening.actions_sp500 import screen_sp500, get_sp500_symbols
         modules['screen_sp500'] = screen_sp500
         modules['get_sp500_symbols'] = get_sp500_symbols
         print("✅ Module actions_sp500 importé")
-    except ImportError as e:
-        print(f"⚠️ Module actions_sp500 non disponible: {e}")
+    except ImportError:
+        # Silencieux si pas présent
         modules['screen_sp500'] = None
         modules['get_sp500_symbols'] = None
     
@@ -178,7 +179,6 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
         
         if mode == "train":
             print("\n🤖 Entraînement du modèle...")
-            # Note: L'entraînement peut être long
             success = predictor.train(
                 lookback_days=60,
                 epochs=30
@@ -187,7 +187,7 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
                 print("✅ Modèle entraîné avec succès!")
             else:
                 print("❌ Échec de l'entraînement")
-            return  # On ne fait pas d'analyse après l'entraînement
+            return
         
         print(f"\n🔍 Analyse de {symbol}...")
         
@@ -200,7 +200,6 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
             print(f"❌ Erreur: {results['error']}")
             return
         
-        # Afficher les résultats
         print(f"\n📊 RÉSULTATS POUR {symbol}:")
         print(f"   📈 Prix actuel: ${results['current_price']:.2f}")
         print(f"   🎯 Score de trading: {results['trading_score']}/10")
@@ -209,40 +208,50 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
         predictions = results.get('predictions', {})
         if predictions:
             print("\n   🔮 Prédictions de prix:")
-            
-            # Afficher les premières prédictions
-            for horizon in ['1d', '5d', '30d', '90d']:
+            for horizon in ['1d', '5d', '20d', '90d']:
                 if horizon in predictions and predictions[horizon] is not None:
-                    if isinstance(predictions[horizon], (int, float)):
-                        pred = predictions[horizon]
-                        change_pct = ((pred - results['current_price']) / results['current_price'] * 100)
-                        print(f"     {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
+                    pred = predictions[horizon]
+                    change_pct = ((pred - results['current_price']) / results['current_price'] * 100)
+                    print(f"     {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
         
-        # Créer le dashboard si demandé
         if create_dashboard and modules.get('TradingDashboard'):
             print("\n📊 Création du dashboard...")
-            
             try:
                 overview = modules['get_stock_overview'](symbol)
                 dashboard = modules['TradingDashboard'](symbol, results['current_price'])
                 
-                # Récupérer les données techniques si disponibles
-                data = getattr(predictor, 'data', None)
+                # Récupérer les données techniques
+                technical_data = getattr(predictor, 'features', None)
+                if technical_data is None:
+                    print("⚠️ Aucune donnée technique disponible")
                 
-                # Préparer des données simplifiées pour le dashboard
+                # Construire le DataFrame de prédictions à partir de detailed_predictions
+                predictions_df = pd.DataFrame()
+                if advanced and 'detailed_predictions' in results:
+                    # Récupérer le DataFrame de la prédiction 90d
+                    pred_90d = results['detailed_predictions'].get('90d', {})
+                    if isinstance(pred_90d, dict) and 'predictions' in pred_90d:
+                        predictions_df = pred_90d['predictions']
+                else:
+                    # Mode simple : générer un DataFrame à partir des scalaires
+                    last_date = predictor.data.index[-1] if predictor.data is not None else pd.Timestamp.now()
+                    horizons_map = {'1d': 1, '5d': 5, '20d': 20, '90d': 90}
+                    pred_list = []
+                    date_list = []
+                    for h_key, days in horizons_map.items():
+                        if h_key in predictions and predictions[h_key] is not None:
+                            pred_list.append(predictions[h_key])
+                            date_list.append(last_date + timedelta(days=days))
+                    if pred_list:
+                        predictions_df = pd.DataFrame({'Predicted_Close': pred_list}, index=date_list)
+                
                 dashboard.load_data(
                     overview=overview,
-                    technical_data=data,
-                    predictions={
-                        'future_prices': [],
-                        'return_1d': 0,
-                        'return_30d': 0,
-                        'return_90d': 0
-                    },
+                    technical_data=technical_data,
+                    predictions_df=predictions_df,
                     score=results['trading_score'],
                     recommendation=results['recommendation']
                 )
-                
                 fig = dashboard.create_main_dashboard()
                 if fig:
                     os.makedirs("dashboards", exist_ok=True)
@@ -251,16 +260,14 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
                     fig.write_html(filename)
                     print(f"✅ Dashboard sauvegardé: {filename}")
                     print("📄 Ouvrez ce fichier dans votre navigateur")
-                    
             except Exception as e:
-                print(f"⚠️ Erreur création dashboard: {e}")
+                print(f"⚠️ Erreur création dashboard analyze_stock: {e}")
         
     except Exception as e:
         print(f"❌ Erreur: {e}")
         import traceback
         traceback.print_exc()
     
-    # Temps d'exécution
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
     
@@ -282,6 +289,7 @@ def main():
     if len(sys.argv) == 1:
         parser.print_help()
         return
+    
     args = parser.parse_args()
     
     print_banner()

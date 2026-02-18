@@ -16,84 +16,19 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 warnings.filterwarnings('ignore')
 
-# TensorFlow/Keras
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, Model
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import (
-    Dense, Dropout, LSTM, Input, Flatten, Conv1D,
-    BatchNormalization, MaxPooling1D, GlobalAveragePooling1D,
-    Bidirectional, GRU, LayerNormalization
-)
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import (
-    EarlyStopping, ReduceLROnPlateau, ModelCheckpoint,
-    TensorBoard, TerminateOnNaN
-)
 
-# Scikit-learn
 from sklearn.preprocessing import StandardScaler
 
 # Modules internes
 from trading_algo.data.data_extraction import StockDataExtractor, get_stock_overview, MacroDataExtractor
-
-# Import du dashboard (à adapter plus tard)
-from trading_algo.visualization.dashboard import TradingDashboard
+from trading_algo.models.base_model import ImprovedLSTMPredictorMultiOutput
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 tf.get_logger().setLevel('ERROR')
-
-class ImprovedLSTMPredictorMultiOutput(keras.Model):
-    """
-    Modèle LSTM amélioré pour prédictions multi-sorties
-    Utilisé dans StockModelTrain
-    """
-    def __init__(self, lstm_units1=64, lstm_units2=32, dense_units=32, 
-                 dropout_rate=0.5, recurrent_dropout=0.2, n_outputs=6):
-        super(ImprovedLSTMPredictorMultiOutput, self).__init__()
-        
-        self.lstm1 = LSTM(
-            units=lstm_units1,
-            return_sequences=True,
-            recurrent_dropout=recurrent_dropout,
-            kernel_regularizer=keras.regularizers.l2(0.01)
-        )
-        self.batch_norm1 = BatchNormalization()
-        self.dropout1 = Dropout(dropout_rate)
-        
-        self.lstm2 = LSTM(
-            units=lstm_units2,
-            return_sequences=False,
-            recurrent_dropout=recurrent_dropout,
-            kernel_regularizer=keras.regularizers.l2(0.01)
-        )
-        self.batch_norm2 = BatchNormalization()
-        self.dropout2 = Dropout(dropout_rate)
-        
-        self.dense1 = Dense(dense_units, activation='relu', 
-                           kernel_regularizer=keras.regularizers.l2(0.01))
-        self.batch_norm3 = BatchNormalization()
-        self.dropout3 = Dropout(dropout_rate)
-        
-        # Couche de sortie avec n_outputs cibles
-        self.output_layer = Dense(n_outputs, activation='linear')
-        
-    def call(self, inputs, training=False):
-        x = self.lstm1(inputs)
-        x = self.batch_norm1(x, training=training)
-        x = self.dropout1(x, training=training)
-        
-        x = self.lstm2(x)
-        x = self.batch_norm2(x, training=training)
-        x = self.dropout2(x, training=training)
-        
-        x = self.dense1(x)
-        x = self.batch_norm3(x, training=training)
-        x = self.dropout3(x, training=training)
-        
-        return self.output_layer(x)
 
 
 class StockModelTrain:
@@ -130,7 +65,8 @@ class StockModelTrain:
         self.recommendation = "NEUTRE"
         
         # Configuration
-        self.sequence_length = 60
+        self.sequence_length = 60  # valeur par défaut, sera mise à jour pendant l'entraînement
+        self.lookback_days = 60     # alias pour cohérence
         self.batch_size = 32
         self.patience_early_stopping = 20
         
@@ -159,22 +95,13 @@ class StockModelTrain:
         try:
             logger.info(f"Récupération des données pour {self.symbol}")
             
-            # Récupérer les données via data_extraction
             all_data = self.data_extractor.get_all_data(
                 symbol=self.symbol,
                 period=self.period
             )
             
-            if all_data is None:
-                logger.error("Échec de la récupération des données: all_data est None")
-                return False
-            
-            if not isinstance(all_data, dict):
-                logger.error(f"all_data n'est pas un dictionnaire mais {type(all_data)}")
-                return False
-            
-            if 'historical' not in all_data:
-                logger.error("Clé 'historical' manquante")
+            if all_data is None or not isinstance(all_data, dict) or 'historical' not in all_data:
+                logger.error("Données historiques manquantes")
                 return False
             
             historical_data = all_data['historical']
@@ -182,16 +109,13 @@ class StockModelTrain:
                 logger.error("Données historiques vides")
                 return False
             
-            # Stocker les données
             self.data = historical_data
             
-            # Calculer les indicateurs techniques
             if 'technical' in all_data and all_data['technical'] is not None and not all_data['technical'].empty:
                 self.features = all_data['technical']
             else:
                 self.features = self.data_extractor.calculate_technical_indicators(self.data)
             
-            # Créer les cibles
             if 'targets' in all_data and all_data['targets'] is not None and not all_data['targets'].empty:
                 self.targets = all_data['targets']
             else:
@@ -200,16 +124,13 @@ class StockModelTrain:
                     forecast_days=[1, 5, 10, 20, 30, 90]
                 )
             
-            # Vérification finale
             if self.targets is None or self.targets.empty:
                 logger.error("Échec de la création des cibles")
                 return False
             
-            # Mettre à jour le prix actuel
             if not self.data.empty and 'Close' in self.data.columns:
                 self.current_price = float(self.data['Close'].iloc[-1])
             
-            # Ajuster les scalers
             if self.features is not None and not self.features.empty:
                 self.feature_scaler.fit(self.features)
             
@@ -236,7 +157,6 @@ class StockModelTrain:
             
             data_dates = set(self.data.index)
             feature_dates = set(self.features.index)
-            
             common_dates = data_dates.intersection(feature_dates)
             
             logger.info(f"Dates data: {len(data_dates)}, Dates features: {len(feature_dates)}, "
@@ -261,10 +181,8 @@ class StockModelTrain:
                 logger.error("Données non disponibles")
                 return None, None, None, None
             
-            # Vérifier l'alignement
             self._check_data_alignment()
             
-            # Aligner les données
             X_df = self.features.copy()
             y_df = self.targets.copy()
             
@@ -272,14 +190,12 @@ class StockModelTrain:
             X_df = X_df.loc[common_index]
             y_df = y_df.loc[common_index]
             
-            # Nettoyage
             X_df.replace([np.inf, -np.inf], np.nan, inplace=True)
             y_df.replace([np.inf, -np.inf], np.nan, inplace=True)
             
             X_df = X_df.ffill().bfill()
             y_df = y_df.ffill().bfill()
             
-            # Split temporel
             split_idx = int(len(X_df) * train_split)
             
             X_train_df = X_df.iloc[:split_idx]
@@ -287,19 +203,16 @@ class StockModelTrain:
             y_train_df = y_df.iloc[:split_idx]
             y_test_df = y_df.iloc[split_idx:]
             
-            # Vérifier suffisance de données
             if len(X_train_df) < lookback_days + 10:
                 logger.warning("Données insuffisantes pour l'entraînement")
                 return None, None, None, None
             
-            # Scaling
             X_train = self.feature_scaler.transform(X_train_df.values)
             X_test = self.feature_scaler.transform(X_test_df.values)
             
             y_train = self.target_scaler.transform(y_train_df.values)
             y_test = self.target_scaler.transform(y_test_df.values)
             
-            # Créer les séquences
             X_train_seq, y_train_seq = self._create_sequences(X_train, y_train, lookback_days)
             X_test_seq, y_test_seq = self._create_sequences(X_test, y_test, lookback_days)
             
@@ -335,6 +248,10 @@ class StockModelTrain:
             tf.keras.backend.clear_session()
             gc.collect()
             
+            # Sauvegarde du lookback_days pour l'utiliser en prédiction
+            self.lookback_days = lookback_days
+            self.sequence_length = lookback_days  # pour compatibilité
+            
             # Configuration des dossiers
             model_dir = f"models_saved/{self.symbol}"
             checkpoints_dir = f"checkpoints/{self.symbol}"
@@ -344,31 +261,25 @@ class StockModelTrain:
             os.makedirs(checkpoints_dir, exist_ok=True)
             os.makedirs(log_dir, exist_ok=True)
             
-            # Configuration GPU
             self._check_gpu()
             
-            # Préparer les données
             X_train, y_train, X_test, y_test = self.prepare_training_data(lookback_days)
             
             if X_train is None or X_train.shape[0] == 0:
                 logger.error("Données insuffisantes pour l'entraînement")
                 return False
             
-            # Ajustement automatique du batch_size
             if X_train.shape[0] < batch_size * 2:
                 new_batch_size = max(1, X_train.shape[0] // 4)
                 logger.warning(f"Batch size ajusté de {batch_size} à {new_batch_size}")
                 batch_size = new_batch_size
             
-            # Nombre de cibles
             n_outputs = y_train.shape[1]
             logger.info(f"Données d'entraînement: {X_train.shape[0]} échantillons, {n_outputs} cibles")
             logger.info(f"Données de test: {X_test.shape[0]} échantillons")
             
-            # Créer le modèle
             input_shape = (X_train.shape[1], X_train.shape[2])
             
-            # Sélection dynamique de l'architecture
             if X_train.shape[0] < 1000:
                 lstm_units1, lstm_units2 = 32, 16
                 logger.info("Architecture légère sélectionnée (petit dataset)")
@@ -384,7 +295,6 @@ class StockModelTrain:
                 n_outputs=n_outputs
             )
             
-            # Compiler le modèle
             optimizer = tf.keras.optimizers.Adam(
                 learning_rate=0.001,
                 beta_1=0.9,
@@ -395,11 +305,10 @@ class StockModelTrain:
             
             self.model.compile(
                 optimizer=optimizer,
-                loss="huber",  # Plus robuste que MSE
+                loss="huber",
                 metrics=["mae", "mse"]
             )
             
-            # Configuration des callbacks
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             
             callbacks = [
@@ -430,7 +339,6 @@ class StockModelTrain:
                 )
             ]
             
-            # Entraînement
             logger.info(f"Début de l'entraînement pour {epochs} epochs")
             start_time = datetime.now()
             
@@ -447,16 +355,13 @@ class StockModelTrain:
             training_time = (datetime.now() - start_time).total_seconds()
             logger.info(f"Temps d'entraînement: {training_time:.2f} secondes")
             
-            # Évaluation
             train_metrics = self.model.evaluate(X_train, y_train, verbose=0, return_dict=True)
             val_metrics = self.model.evaluate(X_test, y_test, verbose=0, return_dict=True)
             
-            # Sauvegarde du modèle
             model_path = f"{model_dir}/{self.symbol}_model_{timestamp}.keras"
             self.model.save(model_path)
             logger.info(f"Modèle sauvegardé: {model_path}")
             
-            # Sauvegarde des scalers
             feature_scaler_path = f"{model_dir}/{self.symbol}_feature_scaler_{timestamp}.pkl"
             with open(feature_scaler_path, 'wb') as f:
                 pickle.dump(self.feature_scaler, f)
@@ -465,7 +370,6 @@ class StockModelTrain:
             with open(target_scaler_path, 'wb') as f:
                 pickle.dump(self.target_scaler, f)
             
-            # Sauvegarde des métriques
             metrics = {
                 'symbol': self.symbol,
                 'timestamp': timestamp,
@@ -485,11 +389,8 @@ class StockModelTrain:
             }
             
             self._save_metrics(metrics, model_dir)
-            
-            # Générer des visualisations
             self._plot_training_history(history, model_dir, timestamp)
             
-            # Nettoyage mémoire
             del X_train, y_train, X_test, y_test
             gc.collect()
             
@@ -504,15 +405,11 @@ class StockModelTrain:
         """Sauvegarde les métriques d'entraînement"""
         try:
             os.makedirs(save_dir, exist_ok=True)
-            
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"{save_dir}/metrics_{timestamp}.json"
-            
             with open(filename, 'w') as f:
                 json.dump(metrics, f, indent=2)
-            
             logger.info(f"Métriques sauvegardées: {filename}")
-            
         except Exception as e:
             logger.error(f"Erreur save_metrics: {e}")
     
@@ -520,10 +417,7 @@ class StockModelTrain:
         """Génère et sauvegarde des graphiques d'entraînement"""
         try:
             import matplotlib.pyplot as plt
-            
             fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-            
-            # Plot loss
             axes[0].plot(history.history['loss'], label='Train Loss')
             axes[0].plot(history.history['val_loss'], label='Validation Loss')
             axes[0].set_title('Model Loss')
@@ -532,7 +426,6 @@ class StockModelTrain:
             axes[0].legend()
             axes[0].grid(True)
             
-            # Plot MAE
             axes[1].plot(history.history['mae'], label='Train MAE')
             axes[1].plot(history.history['val_mae'], label='Validation MAE')
             axes[1].set_title('Model MAE')
@@ -556,11 +449,9 @@ class StockModelTrain:
         try:
             logger.info(f"Analyse de {self.symbol}")
             
-            # 1. Récupérer les données
             if not self.fetch_data():
                 return {"error": "Échec de la récupération des données", "symbol": self.symbol}
             
-            # 2. Entraîner le modèle
             logger.info("Entraînement du modèle IA...")
             training_success = self.train(epochs=30, lookback_days=60)
             
@@ -571,15 +462,12 @@ class StockModelTrain:
                     "current_price": self.current_price
                 }
             
-            # 3. Générer les prédictions
             logger.info("Génération des prédictions...")
             predictions = self.generate_predictions()
             
-            # 4. Calculer le score et recommandation
             self.trading_score = self.calculate_trading_score(predictions)
             self.recommendation = self.generate_recommendation(self.trading_score)
             
-            # 5. Stocker les résultats
             self.analysis_results = {
                 "symbol": self.symbol,
                 "current_price": self.current_price,
@@ -605,22 +493,20 @@ class StockModelTrain:
         """
         try:
             if self.model is None or self.features is None:
+                logger.error("Modèle ou features non disponibles")
                 return {}
             
-            # Préparer les dernières données pour la prédiction
-            recent_data = self.features.iloc[-self.sequence_length:]
+            if len(self.features) < self.lookback_days:
+                logger.error(f"Pas assez de données : besoin de {self.lookback_days} jours, disponible {len(self.features)}")
+                return {}
+            
+            recent_data = self.features.iloc[-self.lookback_days:]
             scaled_data = self.feature_scaler.transform(recent_data)
+            X_pred = scaled_data.reshape(1, self.lookback_days, -1)
             
-            # Reshape pour le modèle
-            X_pred = scaled_data.reshape(1, self.sequence_length, -1)
-            
-            # Faire la prédiction
             y_pred_scaled = self.model.predict(X_pred, verbose=0)
-            
-            # Inverser la normalisation
             y_pred = self.target_scaler.inverse_transform(y_pred_scaled)
             
-            # Extraire les différentes prédictions
             predictions = {
                 "1d": float(y_pred[0, 0]) if y_pred.shape[1] > 0 else None,
                 "5d": float(y_pred[0, 1]) if y_pred.shape[1] > 1 else None,
@@ -641,21 +527,16 @@ class StockModelTrain:
         Calcule un score de trading basé sur les prédictions
         """
         try:
-            score = 5.0  # Score neutre par défaut
-            
+            score = 5.0
             if not predictions:
                 return score
             
-            # Calculer les rendements prévus
             returns = {}
             for horizon, pred in predictions.items():
                 if pred is not None and self.current_price > 0:
                     returns[horizon] = (pred - self.current_price) / self.current_price * 100
             
-            # Pondération des différents horizons
             weights = {"1d": 0.1, "5d": 0.15, "10d": 0.2, "30d": 0.3, "90d": 0.25}
-            
-            # Calcul du score
             weighted_return = 0
             total_weight = 0
             
@@ -666,10 +547,8 @@ class StockModelTrain:
             
             if total_weight > 0:
                 avg_return = weighted_return / total_weight
-                
-                # Conversion en score 0-10
                 score = 5 + (avg_return / 2)
-                score = max(0, min(10, score))  # Clipper entre 0 et 10
+                score = max(0, min(10, score))
             
             return round(score, 2)
             
@@ -697,7 +576,6 @@ class StockModelTrain:
         Crée un tableau de bord interactif (à implémenter avec le module dashboard)
         """
         try:
-            # Vérifier que l'analyse a été effectuée
             if not self.analysis_results:
                 self.analyze_model_stock()
             
@@ -717,7 +595,7 @@ class StockModelTrain:
             print("\nNote: Le dashboard interactif sera disponible avec le module dashboard.py")
             
         except Exception as e:
-            logger.error(f"Erreur create_dashboard: {e}")
+            logger.error(f"Erreur stockmodeltrain.create_dashboard: {e}")
 
 
 def main():
@@ -725,17 +603,9 @@ def main():
     print("🚀 PRÉDICTEUR D'ACTIONS AVEC IA")
     print("="*60)
     
-    # Actions populaires
     popular_stocks = {
-        '1': 'AAPL',
-        '2': 'TSLA', 
-        '3': 'MSFT',
-        '4': 'GOOGL',
-        '5': 'AMZN',
-        '6': 'META',
-        '7': 'NVDA',
-        '8': 'BTC-USD',
-        '9': 'SPY',
+        '1': 'AAPL', '2': 'TSLA', '3': 'MSFT', '4': 'GOOGL',
+        '5': 'AMZN', '6': 'META', '7': 'NVDA', '8': 'BTC-USD', '9': 'SPY',
     }
     
     print("\n📈 ACTIONS POPULAIRES:")
@@ -743,7 +613,6 @@ def main():
         print(f" {key}. {value}")
     print(" 0. Entrer un symbole personnalisé")
     
-    # Sélection de l'action
     choice = input("\nChoisissez une action (1-9) ou 0 pour personnalisé: ").strip()
     
     if choice == '0':
@@ -754,7 +623,6 @@ def main():
         print("Choix invalide, utilisation de AAPL par défaut")
         symbol = 'AAPL'
     
-    # Période d'analyse
     print("\n⏰ PÉRIODE D'ANALYSE:")
     print(" 1. 1 an")
     print(" 2. 3 ans")
@@ -765,14 +633,12 @@ def main():
     periods = {'1': '1y', '2': '3y', '3': '5y', '4': '10y'}
     period = periods.get(period_choice, '5y')
     
-    # Options d'analyse
     print("\n⚙️ OPTIONS D'ANALYSE:")
     print(" 1. Analyse complète avec dashboard")
     print(" 2. Analyse rapide (sans dashboard)")
     
     option_choice = input("Choisissez l'option (1-2): ").strip()
     
-    # Exécution de l'analyse
     print(f"\n{'='*60}")
     print(f"Lancement de l'analyse pour {symbol} ({period})...")
     print(f"{'='*60}")
@@ -783,7 +649,6 @@ def main():
         predictor = StockModelTrain(symbol, period)
         results = predictor.analyze_model_stock()
         
-        # Afficher les résultats
         if 'error' not in results:
             print(f"\n📊 RÉSULTATS POUR {symbol}:")
             print(f"   Prix actuel: ${results['current_price']:.2f}")
@@ -797,7 +662,6 @@ def main():
                     change_pct = ((pred - results['current_price']) / results['current_price'] * 100)
                     print(f"     {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
             
-            # Créer le dashboard si demandé
             if option_choice == '1':
                 print("\n📈 Création du dashboard...")
                 predictor.create_dashboard()
@@ -807,7 +671,6 @@ def main():
     except Exception as e:
         print(f"❌ Erreur lors de l'analyse: {e}")
     
-    # Temps d'exécution
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
     

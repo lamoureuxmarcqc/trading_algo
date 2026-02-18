@@ -1,61 +1,12 @@
 """
-Module pour trouver le meilleur modèle et définir ImprovedLSTMPredictorMultiOutput
+Module pour trouver le meilleur modèle (dépend de base_model)
 """
 
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers, Model
 tf.get_logger().setLevel('ERROR')
 
-class ImprovedLSTMPredictorMultiOutput(keras.Model):
-    """
-    Modèle LSTM amélioré pour prédictions multi-sorties
-    """
-    def __init__(self, lstm_units1=64, lstm_units2=32, dense_units=32, 
-                 dropout_rate=0.5, recurrent_dropout=0.2, n_outputs=6):
-        super(ImprovedLSTMPredictorMultiOutput, self).__init__()
-        
-        self.lstm1 = layers.LSTM(
-            units=lstm_units1,
-            return_sequences=True,
-            recurrent_dropout=recurrent_dropout,
-            kernel_regularizer=keras.regularizers.l2(0.01)
-        )
-        self.batch_norm1 = layers.BatchNormalization()
-        self.dropout1 = layers.Dropout(dropout_rate)
-        
-        self.lstm2 = layers.LSTM(
-            units=lstm_units2,
-            return_sequences=False,
-            recurrent_dropout=recurrent_dropout,
-            kernel_regularizer=keras.regularizers.l2(0.01)
-        )
-        self.batch_norm2 = layers.BatchNormalization()
-        self.dropout2 = layers.Dropout(dropout_rate)
-        
-        self.dense1 = layers.Dense(dense_units, activation='relu', 
-                                   kernel_regularizer=keras.regularizers.l2(0.01))
-        self.batch_norm3 = layers.BatchNormalization()
-        self.dropout3 = layers.Dropout(dropout_rate)
-        
-        # Couche de sortie avec n_outputs cibles
-        self.output_layer = layers.Dense(n_outputs, activation='linear')
-        
-    def call(self, inputs, training=False):
-        x = self.lstm1(inputs)
-        x = self.batch_norm1(x, training=training)
-        x = self.dropout1(x, training=training)
-        
-        x = self.lstm2(x)
-        x = self.batch_norm2(x, training=training)
-        x = self.dropout2(x, training=training)
-        
-        x = self.dense1(x)
-        x = self.batch_norm3(x, training=training)
-        x = self.dropout3(x, training=training)
-        
-        return self.output_layer(x)
-
+from trading_algo.models.base_model import ImprovedLSTMPredictorMultiOutput
 
 class ModelFinder:
     """

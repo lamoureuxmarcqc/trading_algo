@@ -67,7 +67,8 @@ class StockScreener:
         """
         # Chemin absolu vers le fichier CSV (en partant de l'emplacement de ce script)
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        csv_path = os.path.join(current_dir, '..\data', 'cie_sp500.csv')
+        # Correction : utiliser os.path.join avec des composants séparés pour compatibilité multi-plateforme
+        csv_path = os.path.join(current_dir, '..', 'data', 'cie_sp500.csv')
     
         try:
             if not os.path.exists(csv_path):
@@ -81,8 +82,8 @@ class StockScreener:
             else:
                 symbols = df.iloc[:, 0].tolist()  # première colonne
         
-            # Nettoyer les symboles : remplacer '.' par '-' (compatible yfinance)
-            symbols = [str(s).replace('.', '-') for s in symbols]
+            # Nettoyer les symboles : supprimer les espaces, remplacer '.' par '-' (compatible yfinance)
+            symbols = [str(s).strip().replace('.', '-') for s in symbols]
         
             logger.info(f"Récupéré {len(symbols)} symboles depuis le fichier local")
             return symbols
@@ -377,6 +378,11 @@ class StockScreener:
             
             # Prendre la dernière ligne
             last_row = df.iloc[-1]
+            
+            # Vérifier la présence de valeurs manquantes
+            if last_row.isnull().any():
+                logger.warning(f"Valeurs manquantes dans les features pour le stock (dernière ligne)")
+                return None
             
             # Sélectionner les mêmes features que pendant l'entraînement
             feature_cols = [
