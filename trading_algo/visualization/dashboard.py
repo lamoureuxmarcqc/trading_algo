@@ -394,10 +394,10 @@ class TradingDashboard:
             return
         if 'Predicted_Close' not in self.predictions_df.columns:
             return
-        
+    
         future_dates = self.predictions_df.index
         future_prices = self.predictions_df['Predicted_Close'].values
-        
+    
         fig.add_trace(
             go.Scatter(
                 x=future_dates,
@@ -410,16 +410,28 @@ class TradingDashboard:
             ),
             row=row, col=col
         )
-        
-        fig.add_hline(
-            y=self.current_price,
-            line_dash="dot",
-            line_color="blue",
-            opacity=0.5,
-            annotation_text=f"Actuel: ${self.current_price:.2f}",
-            row=row, col=col
-        )
     
+        # Remplacer add_hline par add_shape
+        if len(future_dates) > 0:
+            fig.add_shape(
+                type="line",
+                x0=future_dates[0],
+                x1=future_dates[-1],
+                y0=self.current_price,
+                y1=self.current_price,
+                line=dict(dash="dot", color="blue", width=1),
+                row=row, col=col
+            )
+            fig.add_annotation(
+                x=future_dates[-1],
+                y=self.current_price,
+                text=f"Actuel: ${self.current_price:.2f}",
+                showarrow=False,
+                yshift=10,
+                font=dict(size=10),
+                row=row, col=col
+            )
+
     def _update_layout(self, fig):
         try:
             fig.update_layout(

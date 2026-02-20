@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>7000acd4-137c-4985-830d-8b227c9d9010</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>src\trading_algo\main.py</StartupFile>
+    <StartupFile>trading_algo\__main__.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>

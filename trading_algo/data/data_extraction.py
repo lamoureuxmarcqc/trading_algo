@@ -110,6 +110,7 @@ def get_stock_overview(symbol: str) -> Dict[str, Any]:
         }
         
         logger.info(f"Aperçu récupéré pour {symbol}")
+
         return overview
         
     except Exception as e:
@@ -215,54 +216,89 @@ class StockDataExtractor:
     def get_fundamental_data(self, symbol: str = None) -> Dict[str, Any]:
         """
         Récupère les données fondamentales depuis Financial Modeling Prep
-        250 appels gratuits par jour
+        Gestion améliorée des erreurs 403
         """
         if symbol is None:
             symbol = self.symbol
-        
+    
         try:
             api_key = API_CONFIG['FINANCIAL_MODELING_PREP']
             if api_key == 'demo':
                 logger.warning("Clé FMP démo - données limitées")
                 return {}
-            
+        
             # Données de profil
             profile_url = f"https://financialmodelingprep.com/api/v3/profile/{symbol}"
             profile_params = {'apikey': api_key}
-            
+        
             response = requests.get(profile_url, params=profile_params, timeout=10)
-            
-            if response.status_code == 200:
-                profile_data = response.json()
-            else:
+        
+            if response.status_code == 403:
+                logger.error(f"Accès interdit à l'API FMP (403) pour {symbol} - vérifiez votre clé ou abonnement")
+                # Marquer la clé comme invalide pour éviter de nouveaux appels
+                API_CONFIG['FINANCIAL_MODELING_PREP'] = 'demo'
+                return {}
+            elif response.status_code != 200:
                 logger.warning(f"Erreur API FMP (profile): {response.status_code}")
                 profile_data = []
-            
+            else:
+                profile_data = response.json()
+        
             # Ratios financiers
             ratios_url = f"https://financialmodelingprep.com/api/v3/ratios/{symbol}"
             ratios_params = {'apikey': api_key}
-            
+        
             ratios_response = requests.get(ratios_url, params=ratios_params, timeout=10)
-            
-            if ratios_response.status_code == 200:
-                ratios_data = ratios_response.json()
-            else:
+        
+            if ratios_response.status_code == 403:
+                logger.error(f"Accès interdit à l'API FMP (ratios) - vérifiez votre clé ou abonnement")
+                API_CONFIG['FINANCIAL_MODELING_PREP'] = 'demo'
+                return {}
+            elif ratios_response.status_code != 200:
                 logger.warning(f"Erreur API FMP (ratios): {ratios_response.status_code}")
                 ratios_data = []
-            
+            else:
+                ratios_data = ratios_response.json()
+        
             fundamental_data = {
                 'profile': profile_data[0] if profile_data else {},
                 'ratios': ratios_data[0] if ratios_data else {},
                 'source': 'Financial Modeling Prep'
             }
-            
+        
             logger.info(f"Données fondamentales récupérées pour {symbol}")
             return fundamental_data
-            
+        
         except Exception as e:
             logger.error(f"Erreur données fondamentales pour {symbol}: {e}")
             return {}
-    
+
+    def get_fundamental_data_fallback(self, symbol: str) -> Dict[str, Any]:
+        """Récupère des données fondamentales via Yahoo Finance"""
+        try:
+            stock = yf.Ticker(symbol)
+            info = stock.info
+            return {
+                'profile': {
+                    'companyName': info.get('longName', ''),
+                    'sector': info.get('sector', ''),
+                    'industry': info.get('industry', ''),
+                    'website': info.get('website', ''),
+                    'marketCap': info.get('marketCap', 0),
+                    'beta': info.get('beta', 0),
+                },
+                'ratios': {
+                    'peRatio': info.get('trailingPE', 0),
+                    'forwardPE': info.get('forwardPE', 0),
+                    'pegRatio': info.get('pegRatio', 0),
+                    'priceToSalesRatio': info.get('priceToSalesTrailing12Months', 0),
+                    'debtToEquity': info.get('debtToEquity', 0),
+                    'returnOnEquity': info.get('returnOnEquity', 0),
+                },
+                'source': 'Yahoo Finance'
+            }
+        except:
+            return {}    
     def get_sentiment_from_x(self, symbol: str = None) -> Dict[str, Any]:
         """
         Récupère le sentiment depuis X (Twitter)

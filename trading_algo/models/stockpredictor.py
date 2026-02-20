@@ -46,7 +46,7 @@ class StockPredictor(StockModelTrain):
         self.risk_tolerance = 0.1
         
         logger.info(f"StockPredictor avancé initialisé pour {symbol}")
-    
+
     def predict_future(
         self,
         days_ahead: int = 30,
@@ -59,7 +59,7 @@ class StockPredictor(StockModelTrain):
         Prédit les prix futurs et génère des signaux de trading.
         """
         logger.info(f"🔮 Début de la prédiction pour {days_ahead} jours à venir")
-        
+    
         try:
             if days_ahead <= 0:
                 raise ValueError("days_ahead doit être > 0")
@@ -69,38 +69,64 @@ class StockPredictor(StockModelTrain):
                 raise ValueError("Aucun modèle entraîné disponible")
             if self.data is None or len(self.data) < 100:
                 raise ValueError("Données historiques insuffisantes")
-            
+        
             logger.info("Préparation des données pour la prédiction...")
             recent_data = self.data.tail(min(252, len(self.data)))
-            
+        
             features_df = self._prepare_prediction_features(
                 recent_data, 
                 include_sentiment=include_sentiment
             )
-            
+        
             if features_df.empty or len(features_df) < 50:
                 logger.warning("Features insuffisantes pour la prédiction")
                 return self._get_empty_prediction_result()
-            
+        
             logger.info(f"Génération des prédictions avec méthode {ensemble_method}...")
             predictions = self._generate_predictions(
                 features_df, 
                 days_ahead, 
                 method=ensemble_method
             )
+        
+            # --- DÉBUT DE L'AMÉLIORATION : interpolation des prédictions ponctuelles ---
+            try:
+                # Récupérer les prédictions aux horizons fixes
+                point_preds = self.generate_predictions()  # dict avec '1d', '5d', ...
             
+                horizons = []
+                prices = []
+                # Mapping des clés vers les jours
+                mapping = {'1d': 1, '5d': 5, '10d': 10, '20d': 20, '30d': 30, '90d': 90}
+                for key, day in mapping.items():
+                    if key in point_preds and point_preds[key] is not None:
+                        horizons.append(day)
+                        prices.append(point_preds[key])
+            
+                if len(horizons) >= 2:
+                    # Interpolation linéaire sur tous les jours demandés
+                    all_days = np.arange(1, days_ahead + 1)
+                    interpolated = np.interp(all_days, horizons, prices)
+                    predictions['ensemble'] = interpolated
+                    logger.info(f"Prédictions interpolées à partir de {len(horizons)} points")
+                else:
+                    logger.warning("Pas assez de points pour l'interpolation, utilisation des prédictions brutes")
+            except Exception as e:
+                logger.warning(f"Erreur lors de l'interpolation: {e}, utilisation des prédictions brutes")
+            # --- FIN DE L'AMÉLIORATION ---
+        
             confidence_intervals = self._calculate_confidence_intervals(
                 predictions, 
                 confidence_level
             )
-            
+        
             logger.info("Génération des signaux de trading...")
             trading_signals = self._generate_trading_signals(
                 predictions,
                 confidence_intervals,
                 recent_data
             )
-            
+        
             scenarios = None
             if scenario_analysis:
                 logger.info("Analyse de scénarios...")
@@ -109,25 +135,25 @@ class StockPredictor(StockModelTrain):
                     days_ahead,
                     predictions
                 )
-            
+        
             logger.info("Calcul des métriques de performance...")
             metrics = self._calculate_prediction_metrics(
                 predictions,
                 trading_signals,
                 recent_data
             )
-            
+        
             result_df = self._format_predictions_to_dataframe(
                 predictions,
                 confidence_intervals,
                 recent_data,
                 days_ahead
             )
-            
+        
             self._save_prediction_history(result_df, metrics)
-            
+        
             logger.info(f"✅ Prédiction terminée: {len(trading_signals['signals'])} signaux générés")
-            
+        
             return {
                 'predictions': result_df,
                 'signals': trading_signals,
@@ -138,11 +164,10 @@ class StockPredictor(StockModelTrain):
                 'prediction_date': pd.Timestamp.now(),
                 'horizon_days': days_ahead
             }
-            
+        
         except Exception as e:
             logger.error(f"❌ Erreur lors de la prédiction: {str(e)}", exc_info=True)
-            return self._handle_prediction_error(e)
-    
+            return self._handle_prediction_error(e)    
     def _prepare_prediction_features(self, data: pd.DataFrame, include_sentiment: bool = True) -> pd.DataFrame:
         try:
             if self.features is None or self.features.empty:
@@ -184,6 +209,51 @@ class StockPredictor(StockModelTrain):
             logger.error(f"Erreur préparation features: {e}")
             return pd.DataFrame() 
     
+    def _generate_predictions(self, features_df: pd.DataFrame, days_ahead: int, method: str = "weighted") -> Dict:
+        """Génère des prédictions avec différentes méthodes."""
+        predictions = {}
+        
+        # Prédiction avec le modèle principal
+        if self.model is not None:
+            try:
+                X_input = self._prepare_model_input(features_df)
+                if X_input is not None:
+                    y_pred = self.model.predict(X_input, verbose=0)
+                    # On répète la prédiction pour days_ahead (le modèle ne prédit qu'un pas)
+                    # Pour une prédiction multi-pas, on pourrait itérer, mais ici on simplifie
+                    # en répétant la même valeur ou en utilisant un modèle séquentiel.
+                    # Pour l'instant, on répète la première valeur prédite.
+                    base_pred = y_pred[0, 0] if y_pred.shape[1] > 0 else 0
+                    predictions['main_model'] = np.full(days_ahead, base_pred)
+            except Exception as e:
+                logger.error(f"Erreur prédiction modèle principal: {e}")
+        
+        # Prédiction avec modèle simple (moyenne mobile)
+        try:
+            simple_pred = self._simple_prediction(features_df, days_ahead)
+            predictions['simple_model'] = simple_pred
+        except Exception as e:
+            logger.error(f"Erreur prédiction simple: {e}")
+        
+        # Combiner les prédictions selon la méthode
+        if method == "weighted" and len(predictions) > 0:
+            final_pred = self._weighted_ensemble(predictions)
+        elif method == "average" and len(predictions) > 0:
+            final_pred = self._average_ensemble(predictions)
+        else:
+            if 'main_model' in predictions:
+                final_pred = predictions['main_model']
+            elif 'simple_model' in predictions:
+                final_pred = predictions['simple_model']
+            else:
+                final_pred = np.zeros(days_ahead)
+        
+        return {
+            'individual': predictions,
+            'ensemble': final_pred,
+            'method': method
+        }
+    
     def _prepare_model_input(self, features_df: pd.DataFrame) -> np.ndarray:
         """Prépare l'input pour le modèle LSTM avec padding si nécessaire."""
         try:
@@ -191,14 +261,12 @@ class StockPredictor(StockModelTrain):
             if len(features_df) < sequence_length:
                 logger.warning(f"Pas assez de données ({len(features_df)}), padding avec la première valeur disponible")
                 pad_len = sequence_length - len(features_df)
-                # Prendre la première ligne pour remplir le début
                 first_row = features_df.iloc[:1].values
                 pad_values = np.repeat(first_row, pad_len, axis=0)
                 features_array = np.vstack([pad_values, features_df.values])
             else:
                 features_array = features_df.iloc[-sequence_length:].values
             
-            # Normaliser si scaler disponible
             if hasattr(self, 'feature_scaler') and self.feature_scaler is not None:
                 features_array = self.feature_scaler.transform(features_array)
             
@@ -548,21 +616,8 @@ class StockPredictor(StockModelTrain):
         
             logger.info("Génération des prédictions avancées...")
         
-            # Une seule prédiction sur 90 jours, on extrait les horizons
-            pred_90d = self.predict_future(days_ahead=90)
-            df_pred = pred_90d.get('predictions', pd.DataFrame())
-        
-            predictions_dict = {}
-            if not df_pred.empty and 'Predicted_Close' in df_pred.columns:
-                pred_values = df_pred['Predicted_Close'].values
-                if len(pred_values) > 0:
-                    predictions_dict['1d'] = float(pred_values[0])
-                if len(pred_values) > 4:
-                    predictions_dict['5d'] = float(pred_values[4])
-                if len(pred_values) > 19:
-                    predictions_dict['20d'] = float(pred_values[19])
-                if len(pred_values) > 89:
-                    predictions_dict['90d'] = float(pred_values[89])
+            # ✅ Utiliser generate_predictions au lieu de predict_future
+            predictions_dict = self.generate_predictions()
         
             self.trading_score = self.calculate_trading_score(predictions_dict)
             self.recommendation = self.generate_recommendation(self.trading_score)
@@ -573,9 +628,6 @@ class StockPredictor(StockModelTrain):
                 "trading_score": self.trading_score,
                 "recommendation": self.recommendation,
                 "predictions": predictions_dict,
-                "detailed_predictions": {
-                    "90d": pred_90d
-                },
                 "technical_indicators": self._get_technical_summary(),
                 "market_context": self._get_market_context(),
                 "analysis_date": datetime.now().isoformat()

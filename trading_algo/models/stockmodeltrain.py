@@ -43,7 +43,9 @@ class StockModelTrain:
         self.model = None
         self.data = None
         self.features = None
+        self.feature_columns = None
         self.targets = None
+        self.target_columns = None
         self.current_price = 0.0
         
         # Extracteurs de données
@@ -203,6 +205,12 @@ class StockModelTrain:
             y_train_df = y_df.iloc[:split_idx]
             y_test_df = y_df.iloc[split_idx:]
             
+            # Après avoir préparé X_train_df (avant scaling), vers la fin de la méthode train()
+            self.feature_columns = X_train_df.columns.tolist()
+            logger.info(f"Colonnes des features sauvegardées: {len(self.feature_columns)}")
+            # Après avoir préparé y_train_df, avant le scaling
+            self.target_columns = y_train_df.columns.tolist()
+            logger.info(f"Colonnes cibles sauvegardées: {len(self.target_columns)}")
             if len(X_train_df) < lookback_days + 10:
                 logger.warning("Données insuffisantes pour l'entraînement")
                 return None, None, None, None
@@ -390,7 +398,7 @@ class StockModelTrain:
             
             self._save_metrics(metrics, model_dir)
             self._plot_training_history(history, model_dir, timestamp)
-            
+
             del X_train, y_train, X_test, y_test
             gc.collect()
             
@@ -488,36 +496,56 @@ class StockModelTrain:
             return {"error": str(e), "symbol": self.symbol}
     
     def generate_predictions(self) -> Dict[str, Any]:
-        """
-        Génère les prédictions à différents horizons
-        """
         try:
             if self.model is None or self.features is None:
                 logger.error("Modèle ou features non disponibles")
                 return {}
-            
-            if len(self.features) < self.lookback_days:
-                logger.error(f"Pas assez de données : besoin de {self.lookback_days} jours, disponible {len(self.features)}")
+        
+            if not hasattr(self, 'feature_columns'):
+                logger.error("Aucune colonne de features sauvegardée. Réentraînez le modèle.")
                 return {}
-            
-            recent_data = self.features.iloc[-self.lookback_days:]
+        
+            missing = set(self.feature_columns) - set(self.features.columns)
+            if missing:
+                logger.error(f"Colonnes manquantes dans features: {missing}")
+                return {}
+        
+            features_aligned = self.features[self.feature_columns]
+        
+            if len(features_aligned) < self.lookback_days:
+                logger.error(f"Pas assez de données : besoin de {self.lookback_days} jours, disponible {len(features_aligned)}")
+                return {}
+        
+            recent_data = features_aligned.iloc[-self.lookback_days:]
             scaled_data = self.feature_scaler.transform(recent_data)
             X_pred = scaled_data.reshape(1, self.lookback_days, -1)
-            
+        
             y_pred_scaled = self.model.predict(X_pred, verbose=0)
+        
+            if not hasattr(self, 'target_columns'):
+                logger.error("target_columns non définies. Utilisation de l'ordre par défaut (risqué).")
+                y_pred = self.target_scaler.inverse_transform(y_pred_scaled)
+                return {
+                    "1d": float(y_pred[0, 0]) if y_pred.shape[1] > 0 else None,
+                    "5d": float(y_pred[0, 1]) if y_pred.shape[1] > 1 else None,
+                    "10d": float(y_pred[0, 2]) if y_pred.shape[1] > 2 else None,
+                    "20d": float(y_pred[0, 3]) if y_pred.shape[1] > 3 else None,
+                    "30d": float(y_pred[0, 4]) if y_pred.shape[1] > 4 else None,
+                    "90d": float(y_pred[0, 5]) if y_pred.shape[1] > 5 else None
+                }
+        
             y_pred = self.target_scaler.inverse_transform(y_pred_scaled)
-            
-            predictions = {
-                "1d": float(y_pred[0, 0]) if y_pred.shape[1] > 0 else None,
-                "5d": float(y_pred[0, 1]) if y_pred.shape[1] > 1 else None,
-                "10d": float(y_pred[0, 2]) if y_pred.shape[1] > 2 else None,
-                "20d": float(y_pred[0, 3]) if y_pred.shape[1] > 3 else None,
-                "30d": float(y_pred[0, 4]) if y_pred.shape[1] > 4 else None,
-                "90d": float(y_pred[0, 5]) if y_pred.shape[1] > 5 else None
-            }
-            
+            pred_dict = {col: y_pred[0, i] for i, col in enumerate(self.target_columns)}
+        
+            horizons = [1, 5, 10, 20, 30, 90]
+            predictions = {}
+            for days in horizons:
+                close_col = f'Target_Close_{days}d'
+                predictions[f'{days}d'] = float(pred_dict[close_col]) if close_col in pred_dict else None
+        
+            logger.info(f"Prédictions extraites: {predictions}")
             return predictions
-            
+        
         except Exception as e:
             logger.error(f"Erreur generate_predictions: {e}")
             return {}
