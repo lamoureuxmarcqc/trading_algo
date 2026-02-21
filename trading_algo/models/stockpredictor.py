@@ -26,26 +26,113 @@ from trading_algo.data.data_extraction import StockDataExtractor, get_stock_over
 from trading_algo.visualization.dashboard import TradingDashboard
 from trading_algo.models.base_model import ImprovedLSTMPredictorMultiOutput
 from trading_algo.models.stockmodeltrain import StockModelTrain
+from trading_algo.risk.risk_manager import RiskManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class StockPredictor(StockModelTrain):
-    """
-    Classe avancée pour les prédictions d'actions avec IA
-    Hérite de StockModelTrain et ajoute des fonctionnalités avancées
-    """
-    
     def __init__(self, symbol: str, period: str = "1y"):
         super().__init__(symbol, period)
-        
         self.prediction_history = []
         self.ensemble_models = []
         self.confidence_level = 0.95
         self.risk_tolerance = 0.1
-        
+        self.risk_manager = RiskManager()
+        self.risk_metrics = None
         logger.info(f"StockPredictor avancé initialisé pour {symbol}")
+
+    def analyze_stock_advanced(self) -> Dict[str, Any]:
+        logger.info(f"🔍 Analyse avancée de {self.symbol}")
+        try:
+            if not self.fetch_data():
+                return {"error": "Échec de la récupération des données"}
+        
+            if self.model is None:
+                logger.info("Entraînement du modèle...")
+                if not self.train(epochs=30, lookback_days=60):
+                    return {"error": "Échec de l'entraînement"}
+        
+            logger.info("Génération des prédictions avancées...")
+            predictions_dict = self.generate_predictions()
+        
+            # Calcul des métriques de risque
+            risk_metrics = {}
+            if self.data is not None and not self.data.empty:
+                returns = self.data['Close'].pct_change().dropna()
+                risk_metrics['sharpe_ratio'] = self.risk_manager.calculate_sharpe_ratio(returns)
+                risk_metrics['max_drawdown'] = self.risk_manager.calculate_max_drawdown(self.data['Close'])
+                risk_metrics['atr_stop'] = self.risk_manager.calculate_atr_stop(self.data)
+                
+                # Niveaux de stop-loss et take-profit basés sur les prédictions
+                stop_loss_levels = {}
+                take_profit_levels = {}
+                for horizon, pred_price in predictions_dict.items():
+                    if pred_price is not None and self.current_price > 0:
+                        # Pour une position longue (achat)
+                        stop_loss = self.current_price * 0.98  # stop à -2%
+                        take_profit = pred_price  # objectif = prix prédit
+                        stop_loss_levels[horizon] = round(stop_loss, 2)
+                        take_profit_levels[horizon] = round(take_profit, 2)
+                risk_metrics['stop_loss_levels'] = stop_loss_levels
+                risk_metrics['take_profit_levels'] = take_profit_levels
+
+            self.risk_metrics = risk_metrics  # Stocker pour usage ultérieur
+        
+            self.trading_score = self.calculate_trading_score(predictions_dict)
+            self.recommendation = self.generate_recommendation(self.trading_score)
+        
+            results = {
+                "symbol": self.symbol,
+                "current_price": self.current_price,
+                "trading_score": self.trading_score,
+                "recommendation": self.recommendation,
+                "predictions": predictions_dict,
+                "technical_indicators": self._get_technical_summary(),
+                "risk_metrics": risk_metrics,  # Utilisation de la variable locale
+                "market_context": self._get_market_context(),
+                "analysis_date": datetime.now().isoformat()
+            }
+        
+            logger.info(f"✅ Analyse avancée terminée pour {self.symbol}")
+            return results
+        
+        except Exception as e:
+            logger.error(f"❌ Erreur analyse avancée: {e}", exc_info=True)
+            return {"error": str(e), "symbol": self.symbol}
+
+    def _log_technical_indicators(self):
+        """Affiche les dernières valeurs des indicateurs techniques clés"""
+        if self.features is None or self.features.empty:
+            logger.warning("Aucune donnée technique disponible")
+            return
+    
+        last_row = self.features.iloc[-1]
+        indicators = {
+            'RSI (14)': last_row.get('RSI', 'N/A'),
+            'MACD': last_row.get('MACD', 'N/A'),
+            'Signal': last_row.get('MACD_Signal', 'N/A'),
+            'SMA 20': last_row.get('SMA_20', 'N/A'),
+            'SMA 50': last_row.get('SMA_50', 'N/A'),
+            'SMA 200': last_row.get('SMA_200', 'N/A'),
+            'ATR': last_row.get('ATR', 'N/A'),
+            'Volume': last_row.get('Volume', 'N/A'),
+            'Momentum 10j': last_row.get('Momentum_10', 'N/A')
+        }
+    
+        logger.info("📊 Indicateurs techniques récents :")
+        for name, value in indicators.items():
+            if value != 'N/A' and not pd.isna(value):
+                if 'SMA' in name or 'ATR' in name:
+                    logger.info(f"   {name}: {value:.2f}")
+                elif 'RSI' in name:
+                    status = "Surachat ⚠️" if value > 70 else "Survente ✅" if value < 30 else "Neutre"
+                    logger.info(f"   {name}: {value:.2f} ({status})")
+                elif 'MACD' in name and value != 'N/A':
+                    logger.info(f"   {name}: {value:.4f}")
+                else:
+                    logger.info(f"   {name}: {value}")
 
     def predict_future(
         self,
@@ -89,22 +176,17 @@ class StockPredictor(StockModelTrain):
                 method=ensemble_method
             )
         
-            # --- DÉBUT DE L'AMÉLIORATION : interpolation des prédictions ponctuelles ---
+            # --- Interpolation des prédictions ponctuelles ---
             try:
-                # Récupérer les prédictions aux horizons fixes
-                point_preds = self.generate_predictions()  # dict avec '1d', '5d', ...
-            
+                point_preds = self.generate_predictions()
                 horizons = []
                 prices = []
-                # Mapping des clés vers les jours
                 mapping = {'1d': 1, '5d': 5, '10d': 10, '20d': 20, '30d': 30, '90d': 90}
                 for key, day in mapping.items():
                     if key in point_preds and point_preds[key] is not None:
                         horizons.append(day)
                         prices.append(point_preds[key])
-            
                 if len(horizons) >= 2:
-                    # Interpolation linéaire sur tous les jours demandés
                     all_days = np.arange(1, days_ahead + 1)
                     interpolated = np.interp(all_days, horizons, prices)
                     predictions['ensemble'] = interpolated
@@ -113,7 +195,6 @@ class StockPredictor(StockModelTrain):
                     logger.warning("Pas assez de points pour l'interpolation, utilisation des prédictions brutes")
             except Exception as e:
                 logger.warning(f"Erreur lors de l'interpolation: {e}, utilisation des prédictions brutes")
-            # --- FIN DE L'AMÉLIORATION ---
         
             confidence_intervals = self._calculate_confidence_intervals(
                 predictions, 
@@ -150,6 +231,8 @@ class StockPredictor(StockModelTrain):
                 days_ahead
             )
         
+            self._log_technical_indicators()
+        
             self._save_prediction_history(result_df, metrics)
         
             logger.info(f"✅ Prédiction terminée: {len(trading_signals['signals'])} signaux générés")
@@ -167,18 +250,17 @@ class StockPredictor(StockModelTrain):
         
         except Exception as e:
             logger.error(f"❌ Erreur lors de la prédiction: {str(e)}", exc_info=True)
-            return self._handle_prediction_error(e)    
+            return self._handle_prediction_error(e)
+    
     def _prepare_prediction_features(self, data: pd.DataFrame, include_sentiment: bool = True) -> pd.DataFrame:
         try:
             if self.features is None or self.features.empty:
                 logger.warning("Features non disponibles, calcul à partir des données...")
-                # Appel correct à la méthode d'instance
                 features_df = self.data_extractor.calculate_technical_indicators(data.copy())
             else:
                 features_df = self.features.copy()
         
             if include_sentiment and hasattr(self, 'sentiment_data'):
-                # À implémenter si vous avez des données de sentiment
                 pass
         
             if not hasattr(self.feature_scaler, 'feature_names_in_'):
@@ -207,35 +289,28 @@ class StockPredictor(StockModelTrain):
         
         except Exception as e:
             logger.error(f"Erreur préparation features: {e}")
-            return pd.DataFrame() 
+            return pd.DataFrame()
     
     def _generate_predictions(self, features_df: pd.DataFrame, days_ahead: int, method: str = "weighted") -> Dict:
         """Génère des prédictions avec différentes méthodes."""
         predictions = {}
         
-        # Prédiction avec le modèle principal
         if self.model is not None:
             try:
                 X_input = self._prepare_model_input(features_df)
                 if X_input is not None:
                     y_pred = self.model.predict(X_input, verbose=0)
-                    # On répète la prédiction pour days_ahead (le modèle ne prédit qu'un pas)
-                    # Pour une prédiction multi-pas, on pourrait itérer, mais ici on simplifie
-                    # en répétant la même valeur ou en utilisant un modèle séquentiel.
-                    # Pour l'instant, on répète la première valeur prédite.
                     base_pred = y_pred[0, 0] if y_pred.shape[1] > 0 else 0
                     predictions['main_model'] = np.full(days_ahead, base_pred)
             except Exception as e:
                 logger.error(f"Erreur prédiction modèle principal: {e}")
         
-        # Prédiction avec modèle simple (moyenne mobile)
         try:
             simple_pred = self._simple_prediction(features_df, days_ahead)
             predictions['simple_model'] = simple_pred
         except Exception as e:
             logger.error(f"Erreur prédiction simple: {e}")
         
-        # Combiner les prédictions selon la méthode
         if method == "weighted" and len(predictions) > 0:
             final_pred = self._weighted_ensemble(predictions)
         elif method == "average" and len(predictions) > 0:
@@ -255,7 +330,6 @@ class StockPredictor(StockModelTrain):
         }
     
     def _prepare_model_input(self, features_df: pd.DataFrame) -> np.ndarray:
-        """Prépare l'input pour le modèle LSTM avec padding si nécessaire."""
         try:
             sequence_length = getattr(self, 'lookback_days', 60)
             if len(features_df) < sequence_length:
@@ -277,39 +351,27 @@ class StockPredictor(StockModelTrain):
             return None
     
     def _simple_prediction(self, features_df: pd.DataFrame, days_ahead: int) -> np.ndarray:
-        """Prédiction simple basée sur la moyenne mobile."""
         try:
             recent_prices = features_df['Close'].values if 'Close' in features_df.columns else features_df.iloc[:, 0].values
-            
             if len(recent_prices) > 10:
                 trend = np.polyfit(range(len(recent_prices)), recent_prices, 1)[0]
             else:
                 trend = 0
-            
             last_price = recent_prices[-1]
             predictions = []
-            
             for i in range(days_ahead):
                 next_price = last_price + trend * (i + 1)
                 noise = np.random.normal(0, abs(trend) * 0.5)
                 predictions.append(next_price + noise)
-            
             return np.array(predictions)
-            
         except Exception as e:
             logger.error(f"Erreur prédiction simple: {e}")
             return np.zeros(days_ahead)
     
     def _weighted_ensemble(self, predictions: Dict) -> np.ndarray:
-        """Combine les prédictions avec des poids."""
-        weights = {
-            'main_model': 0.7,
-            'simple_model': 0.3
-        }
-        
+        weights = {'main_model': 0.7, 'simple_model': 0.3}
         weighted_sum = None
         total_weight = 0
-        
         for model_name, pred in predictions.items():
             if model_name in weights:
                 weight = weights[model_name]
@@ -319,14 +381,12 @@ class StockPredictor(StockModelTrain):
                     min_len = min(len(weighted_sum), len(pred))
                     weighted_sum[:min_len] += pred[:min_len] * weight
                 total_weight += weight
-        
         if weighted_sum is not None and total_weight > 0:
             return weighted_sum / total_weight
         else:
             return list(predictions.values())[0] if predictions else np.array([])
     
     def _average_ensemble(self, predictions: Dict) -> np.ndarray:
-        """Moyenne des prédictions."""
         all_preds = list(predictions.values())
         if not all_preds:
             return np.array([])
@@ -337,24 +397,18 @@ class StockPredictor(StockModelTrain):
         return avg_pred / len(all_preds)
     
     def _calculate_confidence_intervals(self, predictions: Dict, confidence_level: float = 0.95) -> Dict:
-        """Calcule les intervalles de confiance."""
         try:
             individual_preds = predictions.get('individual', {})
             if not individual_preds or len(individual_preds) < 2:
                 return {}
-            
             all_preds = list(individual_preds.values())
             min_len = min(len(p) for p in all_preds)
             stacked = np.array([p[:min_len] for p in all_preds])
-            
             mean_pred = np.mean(stacked, axis=0)
             std_pred = np.std(stacked, axis=0)
-            
             z_score = 1.96 if confidence_level == 0.95 else 2.58 if confidence_level == 0.99 else 1.96
-            
             lower_bound = mean_pred - z_score * std_pred
             upper_bound = mean_pred + z_score * std_pred
-            
             return {
                 'mean': mean_pred,
                 'std': std_pred,
@@ -367,17 +421,13 @@ class StockPredictor(StockModelTrain):
             return {}
     
     def _generate_trading_signals(self, predictions: Dict, confidence_intervals: Dict, recent_data: pd.DataFrame) -> Dict:
-        """Génère des signaux de trading."""
         try:
             if 'Close' not in recent_data.columns:
                 return {'error': 'Données de prix manquantes'}
-            
             current_price = recent_data['Close'].iloc[-1]
             ensemble_pred = predictions.get('ensemble')
-            
             if ensemble_pred is None or len(ensemble_pred) == 0:
                 return {'error': 'Prédictions manquantes'}
-            
             signals = []
             for horizon in [1, 5, 10, 20]:
                 if horizon <= len(ensemble_pred):
@@ -394,9 +444,7 @@ class StockPredictor(StockModelTrain):
                         'take_profit': take_profit,
                         'confidence': confidence_intervals.get('confidence_level', 0.95)
                     })
-            
             overall_signal = self._calculate_overall_signal(signals)
-            
             return {
                 'signals': signals,
                 'overall_signal': overall_signal,
@@ -428,7 +476,6 @@ class StockPredictor(StockModelTrain):
             risk_multiplier = 1.5
         else:
             risk_multiplier = 2.0
-        
         if signal == "BUY":
             stop_loss = current_price * (1 - 0.02 * risk_multiplier)
             take_profit = current_price * (1 + 0.04 * risk_multiplier)
@@ -495,7 +542,6 @@ class StockPredictor(StockModelTrain):
                 actual_returns = historical_data['Close'].pct_change().dropna()
                 metrics['historical_volatility'] = actual_returns.std() * np.sqrt(252)
                 metrics['sharpe_ratio'] = actual_returns.mean() / actual_returns.std() * np.sqrt(252) if actual_returns.std() > 0 else 0
-            
             if 'signals' in signals and signals['signals']:
                 signal_metrics = {
                     'total_signals': len(signals['signals']),
@@ -505,7 +551,6 @@ class StockPredictor(StockModelTrain):
                     'avg_expected_return': np.mean([s.get('expected_return', 0) for s in signals['signals']])
                 }
                 metrics.update(signal_metrics)
-            
             metrics['confidence_score'] = self._calculate_confidence_score(predictions)
             return metrics
         except Exception as e:
@@ -517,7 +562,6 @@ class StockPredictor(StockModelTrain):
             individual_preds = predictions.get('individual', {})
             if not individual_preds or len(individual_preds) < 2:
                 return 0.5
-            
             all_preds = list(individual_preds.values())
             min_len = min(len(p) for p in all_preds)
             first_pred = all_preds[0][:min_len]
@@ -541,22 +585,18 @@ class StockPredictor(StockModelTrain):
                 freq='B'
             )
             result_df = pd.DataFrame(index=future_dates)
-            
             ensemble_pred = predictions.get('ensemble')
             if ensemble_pred is not None and len(ensemble_pred) == days_ahead:
                 result_df['Predicted_Close'] = ensemble_pred
-            
             if confidence_intervals:
                 lower = confidence_intervals.get('lower')
                 upper = confidence_intervals.get('upper')
                 if lower is not None and upper is not None and len(lower) == days_ahead and len(upper) == days_ahead:
                     result_df['CI_Lower'] = lower
                     result_df['CI_Upper'] = upper
-            
             if 'Close' in historical_data.columns and 'Predicted_Close' in result_df.columns:
                 current_price = historical_data['Close'].iloc[-1]
                 result_df['Expected_Return'] = (result_df['Predicted_Close'] - current_price) / current_price
-            
             return result_df
         except Exception as e:
             logger.error(f"Erreur formatage prédictions: {e}")
@@ -598,47 +638,6 @@ class StockPredictor(StockModelTrain):
     
     def get_prediction_history(self) -> List[Dict]:
         return self.prediction_history
-    
-    def analyze_stock_advanced(self) -> Dict[str, Any]:
-        """
-        Analyse avancée d'une action avec prédictions détaillées
-        """
-        logger.info(f"🔍 Analyse avancée de {self.symbol}")
-    
-        try:
-            if not self.fetch_data():
-                return {"error": "Échec de la récupération des données"}
-        
-            if self.model is None:
-                logger.info("Entraînement du modèle...")
-                if not self.train(epochs=30, lookback_days=60):
-                    return {"error": "Échec de l'entraînement"}
-        
-            logger.info("Génération des prédictions avancées...")
-        
-            # ✅ Utiliser generate_predictions au lieu de predict_future
-            predictions_dict = self.generate_predictions()
-        
-            self.trading_score = self.calculate_trading_score(predictions_dict)
-            self.recommendation = self.generate_recommendation(self.trading_score)
-        
-            results = {
-                "symbol": self.symbol,
-                "current_price": self.current_price,
-                "trading_score": self.trading_score,
-                "recommendation": self.recommendation,
-                "predictions": predictions_dict,
-                "technical_indicators": self._get_technical_summary(),
-                "market_context": self._get_market_context(),
-                "analysis_date": datetime.now().isoformat()
-            }
-        
-            logger.info(f"✅ Analyse avancée terminée pour {self.symbol}")
-            return results
-        
-        except Exception as e:
-            logger.error(f"❌ Erreur analyse avancée: {e}", exc_info=True)
-            return {"error": str(e), "symbol": self.symbol}
     
     def _get_technical_summary(self) -> Dict:
         try:

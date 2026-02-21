@@ -7,6 +7,7 @@ import sys
 import os
 import argparse
 from datetime import datetime, timedelta
+from matplotlib.pylab import f
 import pandas as pd
 
 
@@ -245,13 +246,18 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
                     if pred_list:
                         predictions_df = pd.DataFrame({'Predicted_Close': pred_list}, index=date_list)
                 
+                # Dans la fonction analyze_stock, après avoir récupéré results
                 dashboard.load_data(
                     overview=overview,
                     technical_data=technical_data,
                     predictions_df=predictions_df,
                     score=results['trading_score'],
-                    recommendation=results['recommendation']
+                    recommendation=results['recommendation'],
+                    risk_metrics=results.get('risk_metrics', {}),  # Ajout
+                    macro_data=results.get('market_context', {}),  
+                    market_sentiment=results.get('market_context', {})  # ← sentiment marché
                 )
+                print(f"market_context : {results.get('market_context', {})}")
                 fig = dashboard.create_main_dashboard()
                 if fig:
                     os.makedirs("dashboards", exist_ok=True)

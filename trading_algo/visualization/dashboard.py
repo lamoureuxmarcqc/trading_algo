@@ -20,13 +20,14 @@ class TradingDashboard:
         self.current_price = current_price
         self.overview = None
         self.technical_data = None
-        self.predictions_df = None  # DataFrame contenant les prédictions (index dates, colonne Predicted_Close)
+        self.predictions_df = None
         self.macro_data = None
         self.market_sentiment = None
         self.score = 5.0
         self.recommendation = "NEUTRE"
+        self.risk_metrics = None
         self.setup_logging()
-    
+            
     def setup_logging(self):
         logging.basicConfig(
             level=logging.INFO,
@@ -37,30 +38,33 @@ class TradingDashboard:
     def load_data(self, 
                   overview: Dict[str, Any],
                   technical_data: pd.DataFrame,
-                  predictions_df: pd.DataFrame,  # Changé : maintenant un DataFrame
+                  predictions_df: pd.DataFrame,
                   macro_data: Optional[Dict[str, Any]] = None,
                   market_sentiment: Optional[Dict[str, Any]] = None,
                   score: Optional[float] = None,
-                  recommendation: Optional[str] = None):
+                  recommendation: Optional[str] = None,
+                  risk_metrics: Optional[Dict[str, Any]] = None):
         """Charge les données nécessaires pour le dashboard"""
         self.overview = overview
         self.technical_data = technical_data
         self.predictions_df = predictions_df
         self.macro_data = macro_data or {}
         self.market_sentiment = market_sentiment or {}
-        
+        self.risk_metrics = risk_metrics or {}
+        self.score = score
+        self.recommendation = recommendation
+
         if score is not None and recommendation is not None:
             self.score = score
             self.recommendation = recommendation
         else:
             self._calculate_score_and_recommendation()
-        
-        self.logger.info(f"Données chargées pour {self.symbol}")
     
+        self.logger.info(f"Données chargées pour {self.symbol}")
+
     def _calculate_score_and_recommendation(self):
         """Calcule le score et la recommandation basés sur les données"""
         try:
-            # Version simplifiée si pas de score fourni
             tech_score = 5.0
             if self.technical_data is not None and not self.technical_data.empty:
                 last_row = self.technical_data.iloc[-1]
@@ -92,52 +96,108 @@ class TradingDashboard:
             self.logger.error(f"Erreur calcul score: {e}")
             self.score = 5.0
             self.recommendation = "NEUTRE ⚪"
-    
+
     def _add_summary_table(self, fig, row, col):
-        """Ajoute un tableau récapitulatif des indicateurs"""
+        """Ajoute un tableau récapitulatif des indicateurs et métriques de risque"""
         try:
             df = self.technical_data
             last_row = df.iloc[-1] if df is not None and not df.empty else {}
             
-            headers = ["Indicateur", "Valeur", "Interprétation"]
-            cells = []
-            
-            cells.append(["Prix actuel", f"${self.current_price:.2f}", "-"])
+            # Section indicateurs techniques
+            tech_rows = []
+            tech_rows.append(["Prix actuel", f"${self.current_price:.2f}", "-"])
             
             if 'RSI' in last_row:
                 rsi = last_row['RSI']
                 interpretation = "Surachat ⚠️" if rsi > 70 else "Survente ✅" if rsi < 30 else "Neutre ⚖️"
-                cells.append(["RSI (14)", f"{rsi:.1f}", interpretation])
+                tech_rows.append(["RSI (14)", f"{rsi:.1f}", interpretation])
             
             if 'MACD' in last_row and 'MACD_Signal' in last_row:
                 macd = last_row['MACD']
                 signal = last_row['MACD_Signal']
                 status = "Haussier 📈" if macd > signal else "Baissier 📉"
-                cells.append(["MACD", f"{macd:.2f}", status])
+                tech_rows.append(["MACD", f"{macd:.2f}", status])
             
             if 'SMA_50' in last_row and 'SMA_200' in last_row:
                 sma_50 = last_row['SMA_50']
                 sma_200 = last_row['SMA_200']
                 cross = "Croisement doré ✅" if sma_50 > sma_200 else "Croisement mortel ⚠️"
-                cells.append(["SMA 50/200", f"{sma_50:.2f}/{sma_200:.2f}", cross])
+                tech_rows.append(["SMA 50/200", f"{sma_50:.2f}/{sma_200:.2f}", cross])
             
             if 'ATR' in last_row:
                 atr_pct = (last_row['ATR'] / self.current_price) * 100
                 vol_status = "Élevée ⚠️" if atr_pct > 3 else "Modérée ⚖️" if atr_pct > 1.5 else "Faible ✅"
-                cells.append(["Volatilité (ATR%)", f"{atr_pct:.1f}%", vol_status])
+                tech_rows.append(["Volatilité (ATR%)", f"{atr_pct:.1f}%", vol_status])
             
-            cells.append(["Score trading", f"{self.score}/10", self.recommendation])
+            # Section métriques de risque
+            risk_rows = []
+            if self.risk_metrics:
+                if 'sharpe_ratio' in self.risk_metrics:
+                    sr = self.risk_metrics['sharpe_ratio']
+                    sr_status = "Bon" if sr > 1 else "Médiocre" if sr > 0 else "Négatif"
+                    risk_rows.append(["Sharpe Ratio", f"{sr:.2f}", sr_status])
+                
+                if 'max_drawdown' in self.risk_metrics:
+                    mdd = self.risk_metrics['max_drawdown'] * 100
+                    risk_rows.append(["Max Drawdown", f"{mdd:.1f}%", ""])
+                
+                if 'atr_stop' in self.risk_metrics and self.risk_metrics['atr_stop']:
+                    stop = self.risk_metrics['atr_stop']
+                    risk_rows.append(["Stop ATR (2x)", f"${stop:.2f}", ""])
+                
+                if 'stop_loss_levels' in self.risk_metrics:
+                    for horizon, stop in self.risk_metrics['stop_loss_levels'].items():
+                        risk_rows.append([f"Stop {horizon}", f"${stop:.2f}", ""])
+                if 'take_profit_levels' in self.risk_metrics:
+                    for horizon, tp in self.risk_metrics['take_profit_levels'].items():
+                        risk_rows.append([f"Target {horizon}", f"${tp:.2f}", ""])
             
+            # --- NOUVELLE SECTION : Indicateurs économiques ---
+            econ_rows = []
+            if self.macro_data and 'economic_indicators' in self.macro_data:
+                econ = self.macro_data['economic_indicators']
+                for name, data in econ.items():
+                    if isinstance(data, dict) and 'value' in data:
+                        value = data['value']
+                        unit = data.get('unit', '')
+                        # Formater joliment
+                        if isinstance(value, (int, float)):
+                            value_str = f"{value:,.2f} {unit}".strip()
+                        else:
+                            value_str = f"{value} {unit}".strip()
+                        econ_rows.append([name, value_str, ""])
+            # --- NOUVELLE SECTION : Indicateurs économiques ---
+            econ_rows = []
+            if self.macro_data and 'economic_indicators' in self.macro_data:
+                econ = self.macro_data['economic_indicators']
+                for name, data in econ.items():
+                    if isinstance(data, dict) and 'value' in data:
+                        value = data['value']
+                        unit = data.get('unit', '')
+                        # Formater joliment
+                        if isinstance(value, (int, float)):
+                            value_str = f"{value:,.2f} {unit}".strip()
+                        else:
+                            value_str = f"{value} {unit}".strip()
+                        econ_rows.append([name, value_str, ""])
+        
+            # Fusion des sections
+            all_rows = tech_rows + [["---", "---", "---"]] + risk_rows
+            if econ_rows:
+                all_rows += [["--- ÉCONOMIE ---", "", ""]] + econ_rows
+            all_rows.append(["Score trading", f"{self.score}/10", self.recommendation])
+        
+            headers = ["Indicateur", "Valeur", "Interprétation"]
             fig.add_trace(
                 go.Table(
                     header=dict(values=headers, fill_color='paleturquoise', align='left'),
-                    cells=dict(values=list(zip(*cells)), fill_color='lavender', align='left')
+                    cells=dict(values=list(zip(*all_rows)), fill_color='lavender', align='left')
                 ),
                 row=row, col=col
             )
         except Exception as e:
             self.logger.error(f"Erreur ajout table de sommaire: {e}")
-    
+
     def create_main_dashboard(self, save_path: str = "dashboards") -> Optional[go.Figure]:
         """Crée le tableau de bord principal interactif"""
         if self.technical_data is None or self.technical_data.empty:
@@ -177,7 +237,7 @@ class TradingDashboard:
             self._add_volume_chart(fig, row=3, col=3)
             self._add_trend_chart(fig, row=4, col=1)
             self._add_volatility_chart(fig, row=4, col=2)
-            self._add_predictions_chart(fig, row=4, col=3)  # utilise self.predictions_df
+            self._add_predictions_chart(fig, row=4, col=3)
             self._add_summary_table(fig, row=5, col=1)
             
             self._update_layout(fig)
@@ -389,15 +449,14 @@ class TradingDashboard:
             )
     
     def _add_predictions_chart(self, fig, row: int, col: int):
-        """Ajoute le graphique des prévisions à partir du DataFrame predictions_df"""
         if self.predictions_df is None or self.predictions_df.empty:
             return
         if 'Predicted_Close' not in self.predictions_df.columns:
             return
-    
+        
         future_dates = self.predictions_df.index
         future_prices = self.predictions_df['Predicted_Close'].values
-    
+        
         fig.add_trace(
             go.Scatter(
                 x=future_dates,
@@ -410,8 +469,7 @@ class TradingDashboard:
             ),
             row=row, col=col
         )
-    
-        # Remplacer add_hline par add_shape
+        
         if len(future_dates) > 0:
             fig.add_shape(
                 type="line",
