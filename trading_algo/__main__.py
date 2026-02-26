@@ -2,24 +2,21 @@
 """
 Point d'entrée principal du système d'analyse boursière
 """
-
 import sys
 import os
 import argparse
 from datetime import datetime, timedelta
-from matplotlib.pylab import f
 import pandas as pd
-
+import numpy as np
 
 def print_banner():
     banner = r"""
 ╔══════════════════════════════════════════════════════════════╗
-║                SYSTÈME D'ANALYSE BOURSIÈRE AVEC IA           ║
-║                 🚀 Trading Algorithmique Avancé 🚀           ║
+║ SYSTÈME D'ANALYSE BOURSIÈRE AVEC IA ║
+║ 🚀 Trading Algorithmique Avancé 🚀 ║
 ╚══════════════════════════════════════════════════════════════╝
     """
     print(banner)
-
 
 def import_modules():
     """Importe tous les modules nécessaires"""
@@ -74,7 +71,6 @@ def import_modules():
     
     return modules
 
-
 def run_screening(modules):
     """Exécute le screening du S&P 500"""
     print("\n🔍 SCREENING DU S&P 500")
@@ -96,20 +92,20 @@ def run_screening(modules):
             stocks = results['stocks']
             
             print(f"\n📊 RÉSULTATS:")
-            print(f"   🎯 Précision du modèle: {results['metrics']['accuracy']:.3f}")
-            print(f"   📈 Stocks recommandés: {len(stocks)}")
+            print(f" 🎯 Précision du modèle: {results['metrics']['accuracy']:.3f}")
+            print(f" 📈 Stocks recommandés: {len(stocks)}")
             
             if stocks:
                 print(f"\n🏆 ACTIONS RECOMMANDÉES:")
                 for i, stock in enumerate(stocks[:10], 1):
-                    print(f"   {i}. {stock['symbol']}:")
-                    print(f"      Prix: ${stock['current_price']:.2f}")
-                    print(f"      Probabilité: {stock['buy_probability']:.1%}")
-                    print(f"      Signal: {stock['signal_strength']}")
+                    print(f" {i}. {stock['symbol']}:")
+                    print(f" Prix: ${stock['current_price']:.2f}")
+                    print(f" Probabilité: {stock['buy_probability']:.1%}")
+                    print(f" Signal: {stock['signal_strength']}")
                     if stock.get('rsi'):
                         rsi = stock['rsi']
                         status = "SURACHAT ⚠️" if rsi > 70 else "SURVENTE ✅" if rsi < 30 else "NEUTRE"
-                        print(f"      RSI: {rsi:.1f} ({status})")
+                        print(f" RSI: {rsi:.1f} ({status})")
                     print()
             
             print(f"\n💾 Résultats sauvegardés dans: {results['output_file']}")
@@ -123,7 +119,6 @@ def run_screening(modules):
         traceback.print_exc()
     
     print("=" * 60)
-
 
 def compare_stocks(symbols, period, modules):
     """Compare plusieurs actions"""
@@ -141,9 +136,9 @@ def compare_stocks(symbols, period, modules):
             
             if not data.empty:
                 data_dict[symbol] = data
-                print(f"   ✅ {len(data)} périodes récupérées")
+                print(f" ✅ {len(data)} périodes récupérées")
             else:
-                print(f"   ❌ Données non disponibles")
+                print(f" ❌ Données non disponibles")
         
         if len(data_dict) > 1 and modules.get('create_comparison_dashboard'):
             print(f"\n📊 Création du dashboard de comparaison...")
@@ -161,7 +156,6 @@ def compare_stocks(symbols, period, modules):
             
     except Exception as e:
         print(f"❌ Erreur comparaison: {e}")
-
 
 def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
     """Analyse une action"""
@@ -202,18 +196,41 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
             return
         
         print(f"\n📊 RÉSULTATS POUR {symbol}:")
-        print(f"   📈 Prix actuel: ${results['current_price']:.2f}")
-        print(f"   🎯 Score de trading: {results['trading_score']}/10")
-        print(f"   💡 Recommandation: {results['recommendation']}")
+        print(f" 📈 Prix actuel: ${results['current_price']:.2f}")
+        print(f" 🎯 Score de trading: {results['trading_score']}/10")
+        print(f" 💡 Recommandation: {results['recommendation']}")
         
         predictions = results.get('predictions', {})
         if predictions:
-            print("\n   🔮 Prédictions de prix:")
-            for horizon in ['1d', '5d', '20d', '90d']:
+            print("\n 🔮 Prédictions de prix:")
+            for horizon in ['1d', '5d', '10d', '20d', '30d', '90d']:
                 if horizon in predictions and predictions[horizon] is not None:
                     pred = predictions[horizon]
                     change_pct = ((pred - results['current_price']) / results['current_price'] * 100)
-                    print(f"     {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
+                    print(f" {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
+        
+        # Affichage des métriques de risque si disponibles
+        if 'risk_metrics' in results and advanced:
+            rm = results['risk_metrics']
+            print("\n⚠️ MÉTRIQUES DE RISQUE:")
+            if 'sharpe_ratio' in rm:
+                print(f" Sharpe Ratio: {rm['sharpe_ratio']:.2f}")
+            if 'max_drawdown' in rm:
+                print(f" Max Drawdown: {rm['max_drawdown'] * 100:.1f}%")
+            if 'value_at_risk' in rm:
+                print(f" Value at Risk (95%): {rm['value_at_risk'] * 100:.1f}%")
+            if 'beta' in rm:
+                print(f" Bêta: {rm['beta']:.2f}")
+            
+            if 'stop_loss_levels' in rm:
+                print("\n Niveaux de gestion du risque:")
+                for horizon in ['1d', '5d', '10d', '20d', '30d', '90d']:
+                    if horizon in rm['stop_loss_levels']:
+                        stop = rm['stop_loss_levels'][horizon]
+                        tp = rm['take_profit_levels'].get(horizon, 'N/A')
+                        rr = rm['risk_reward_ratios'].get(horizon, 'N/A')
+                        pos = rm['suggested_position_sizes'].get(horizon, 'N/A')
+                        print(f" {horizon}: Stop ${stop:.2f}, Target ${tp:.2f}, R/R {rr:.2f}, Position suggérée: {pos:.0f} actions")
         
         if create_dashboard and modules.get('TradingDashboard'):
             print("\n📊 Création du dashboard...")
@@ -226,38 +243,42 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
                 if technical_data is None:
                     print("⚠️ Aucune donnée technique disponible")
                 
-                # Construire le DataFrame de prédictions à partir de detailed_predictions
+                # Construire le DataFrame de prédictions
                 predictions_df = pd.DataFrame()
-                if advanced and 'detailed_predictions' in results:
-                    # Récupérer le DataFrame de la prédiction 90d
-                    pred_90d = results['detailed_predictions'].get('90d', {})
-                    if isinstance(pred_90d, dict) and 'predictions' in pred_90d:
-                        predictions_df = pred_90d['predictions']
+                if advanced:
+                    # Pour mode avancé, appeler predict_future pour obtenir une série complète
+                    future_results = predictor.predict_future(days_ahead=90)
+                    predictions_df = future_results.get('predictions', pd.DataFrame())
                 else:
-                    # Mode simple : générer un DataFrame à partir des scalaires
+                    # Mode simple : interpoler à partir des prédictions ponctuelles
                     last_date = predictor.data.index[-1] if predictor.data is not None else pd.Timestamp.now()
-                    horizons_map = {'1d': 1, '5d': 5, '20d': 20, '90d': 90}
-                    pred_list = []
-                    date_list = []
-                    for h_key, days in horizons_map.items():
+                    horizons_map = {'1d': 1, '5d': 5, '10d': 10, '20d': 20, '30d': 30, '90d': 90}
+                    days = []
+                    prices = []
+                    for h_key, day in horizons_map.items():
                         if h_key in predictions and predictions[h_key] is not None:
-                            pred_list.append(predictions[h_key])
-                            date_list.append(last_date + timedelta(days=days))
-                    if pred_list:
-                        predictions_df = pd.DataFrame({'Predicted_Close': pred_list}, index=date_list)
+                            days.append(day)
+                            prices.append(predictions[h_key])
+                    if len(days) >= 2:
+                        all_days = np.arange(1, 91)
+                        interpolated_prices = np.interp(all_days, days, prices)
+                        future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=90, freq='B')
+                        predictions_df = pd.DataFrame({'Predicted_Close': interpolated_prices}, index=future_dates)
+                    elif prices:
+                        future_dates = [last_date + timedelta(days=horizons_map[h_key]) for h_key in horizons_map if h_key in predictions]
+                        predictions_df = pd.DataFrame({'Predicted_Close': prices}, index=future_dates)
                 
-                # Dans la fonction analyze_stock, après avoir récupéré results
                 dashboard.load_data(
                     overview=overview,
                     technical_data=technical_data,
                     predictions_df=predictions_df,
                     score=results['trading_score'],
                     recommendation=results['recommendation'],
-                    risk_metrics=results.get('risk_metrics', {}),  # Ajout
-                    macro_data=results.get('market_context', {}),  
-                    market_sentiment=results.get('market_context', {})  # ← sentiment marché
+                    risk_metrics=results.get('risk_metrics', {}),
+                    macro_data=results.get('market_context', {}),
+                    market_sentiment=results.get('market_context', {})  # Assumer que le sentiment est inclus dans market_context
                 )
-                print(f"market_context : {results.get('market_context', {})}")
+                
                 fig = dashboard.create_main_dashboard()
                 if fig:
                     os.makedirs("dashboards", exist_ok=True)
@@ -267,7 +288,7 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
                     print(f"✅ Dashboard sauvegardé: {filename}")
                     print("📄 Ouvrez ce fichier dans votre navigateur")
             except Exception as e:
-                print(f"⚠️ Erreur création dashboard analyze_stock: {e}")
+                print(f"⚠️ Erreur création dashboard: {e}")
         
     except Exception as e:
         print(f"❌ Erreur: {e}")
@@ -280,15 +301,14 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
     print(f"\n⏱️ Analyse terminée en {duration:.1f} secondes")
     print("=" * 60)
 
-
 def main():
     parser = argparse.ArgumentParser(description="Système d'Analyse Boursière avec IA")
     parser.add_argument("symbol", nargs="?", help="Symbole boursier (ex: AAPL)")
-    parser.add_argument("--period", default="1y", choices=["1mo", "3mo", "6mo", "1y", "2y", "5y"], 
-                       help="Période d'analyse")
+    parser.add_argument("--period", default="1y", choices=["1mo", "3mo", "6mo", "1y", "2y", "5y"],
+                        help="Période d'analyse")
     parser.add_argument("--interactive", action="store_true", help="Lancer le mode interactif (choix des actions)")
-    parser.add_argument("--mode", choices=["analyze", "train", "dashboard", "compare", "screen"], 
-                       default="analyze", help="Mode d'exécution")
+    parser.add_argument("--mode", choices=["analyze", "train", "dashboard", "compare", "screen"],
+                        default="analyze", help="Mode d'exécution")
     parser.add_argument("--advanced", action="store_true", help="Utiliser le module avancé StockPredictor")
     parser.add_argument("--dashboard", action="store_true", help="Créer un dashboard après analyse")
     
@@ -306,7 +326,7 @@ def main():
     
     if modules is None:
         print("❌ Impossible de charger les modules nécessaires")
-        print("   Vérifiez que tous les fichiers sont correctement installés")
+        print(" Vérifiez que tous les fichiers sont correctement installés")
         return
     
     # Mode screening
@@ -368,7 +388,6 @@ def main():
         create_dashboard=args.dashboard or args.mode == "dashboard",
         modules=modules
     )
-
 
 if __name__ == "__main__":
     main()

@@ -15,21 +15,16 @@ import warnings
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 warnings.filterwarnings('ignore')
-
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, Model
-
 from sklearn.preprocessing import StandardScaler
-
 # Modules internes
 from trading_algo.data.data_extraction import StockDataExtractor, get_stock_overview, MacroDataExtractor
 from trading_algo.models.base_model import ImprovedLSTMPredictorMultiOutput
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 tf.get_logger().setLevel('ERROR')
-
 
 class StockModelTrain:
     """
@@ -67,8 +62,8 @@ class StockModelTrain:
         self.recommendation = "NEUTRE"
         
         # Configuration
-        self.sequence_length = 60  # valeur par défaut, sera mise à jour pendant l'entraînement
-        self.lookback_days = 60     # alias pour cohérence
+        self.sequence_length = 60 # valeur par défaut, sera mise à jour pendant l'entraînement
+        self.lookback_days = 60 # alias pour cohérence
         self.batch_size = 32
         self.patience_early_stopping = 20
         
@@ -122,7 +117,7 @@ class StockModelTrain:
                 self.targets = all_data['targets']
             else:
                 self.targets = self.data_extractor.create_target_columns(
-                    self.features, 
+                    self.features,
                     forecast_days=[1, 5, 10, 20, 30, 90]
                 )
             
@@ -162,7 +157,7 @@ class StockModelTrain:
             common_dates = data_dates.intersection(feature_dates)
             
             logger.info(f"Dates data: {len(data_dates)}, Dates features: {len(feature_dates)}, "
-                       f"Dates communes: {len(common_dates)}")
+                        f"Dates communes: {len(common_dates)}")
             
             if len(common_dates) < min(len(data_dates), len(feature_dates)) * 0.8:
                 logger.warning(f"Alignement faible: {len(common_dates)/len(data_dates)*100:.1f}%")
@@ -246,7 +241,155 @@ class StockModelTrain:
             y_seq[i - lookback_days] = y[i]
         
         return X_seq, y_seq
-    
+
+    def export_training_data(self, filename: str = None) -> str:
+        """
+        Exporte les données préparées pour l'entraînement dans un fichier Excel.
+        Neutralise toutes les timezones (index + colonnes datetime) et gère les types non supportés.
+        """
+        try:
+            if self.features is None or self.targets is None:
+                logger.error("Pas de données à exporter. Exécutez fetch_data() d'abord.")
+                return None
+
+            # ============================================================
+            # 1) Neutraliser les timezones AVANT l'intersection
+            # ============================================================
+            feat_idx = self.features.index
+            targ_idx = self.targets.index
+
+            if getattr(feat_idx, "tz", None) is not None:
+                feat_idx = feat_idx.tz_localize(None)
+
+            if getattr(targ_idx, "tz", None) is not None:
+                targ_idx = targ_idx.tz_localize(None)
+
+            # Appliquer les index neutralisés aux DataFrames
+            X_df = self.features.copy()
+            y_df = self.targets.copy()
+
+            X_df.index = feat_idx
+            y_df.index = targ_idx
+
+            # Intersection cohérente (timezone-naive)
+            common_idx = feat_idx.intersection(targ_idx)
+
+            # Filtrer les lignes communes
+            X_df = X_df.loc[common_idx].copy()
+            y_df = y_df.loc[common_idx].copy()
+
+            # ============================================================
+            # 2) Neutralisation robuste des timezones dans les colonnes
+            # ============================================================
+            def neutralize_timezones_in_df(df):
+                for col in df.columns:
+                    # Forcer conversion en datetime si possible
+                    try:
+                        df[col] = pd.to_datetime(df[col], errors='ignore')
+                    except Exception:
+                        pass
+
+                    # Neutraliser timezone si datetime
+                    if pd.api.types.is_datetime64_any_dtype(df[col]):
+                        try:
+                            if df[col].dt.tz is not None:
+                                df[col] = df[col].dt.tz_localize(None)
+                        except Exception:
+                            df[col] = df[col].apply(
+                                lambda x: x.tz_localize(None) if hasattr(x, "tz_localize") else x
+                            )
+                return df
+
+            X_df = neutralize_timezones_in_df(X_df)
+            y_df = neutralize_timezones_in_df(y_df)
+
+            # ============================================================
+            # 3) Nettoyage des types non supportés par Excel (sans applymap)
+            # ============================================================
+            def sanitize_for_excel(df):
+                return df.apply(
+                    lambda col: col.map(
+                        lambda x: str(x) if isinstance(x, (list, dict, tuple, set)) else x
+                    )
+                )
+
+            X_df = sanitize_for_excel(X_df)
+            y_df = sanitize_for_excel(y_df)
+
+            # ============================================================
+            # 4) Définir le nom du fichier
+            # ============================================================
+            if filename is None:
+                filename = f"{self.symbol}_training_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+            # ============================================================
+            # 5) Export Excel
+            # ============================================================
+            with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+
+                # Feuille features
+                X_df.to_excel(writer, sheet_name='features')
+
+                # Feuille targets
+                y_df.to_excel(writer, sheet_name='targets')
+
+                # Feuille statistiques descriptives
+                stats_list = []
+                for col in X_df.columns:
+                    stats_list.append({
+                        'type': 'feature',
+                        'colonne': col,
+                        'moyenne': X_df[col].mean(),
+                        'ecart_type': X_df[col].std(),
+                        'min': X_df[col].min(),
+                        'max': X_df[col].max(),
+                        'nb_nan': X_df[col].isna().sum(),
+                        'pct_nan': X_df[col].isna().mean() * 100
+                    })
+                for col in y_df.columns:
+                    stats_list.append({
+                        'type': 'target',
+                        'colonne': col,
+                        'moyenne': y_df[col].mean(),
+                        'ecart_type': y_df[col].std(),
+                        'min': y_df[col].min(),
+                        'max': y_df[col].max(),
+                        'nb_nan': y_df[col].isna().sum(),
+                        'pct_nan': y_df[col].isna().mean() * 100
+                    })
+
+                stats_df = pd.DataFrame(stats_list)
+                stats_df.to_excel(writer, sheet_name='stats', index=False)
+
+                # ============================================================
+                # 6) Feuille info (dates timezone-naive garanties)
+                # ============================================================
+                start_date = common_idx.min()
+                end_date = common_idx.max()
+
+                info_data = {
+                    'symbol': [self.symbol],
+                    'period': [self.period],
+                    'start_date': [start_date],
+                    'end_date': [end_date],
+                    'n_rows': [len(common_idx)],
+                    'n_features': [X_df.shape[1]],
+                    'n_targets': [y_df.shape[1]],
+                    'feature_columns': [', '.join(X_df.columns[:5]) + '...'],
+                    'target_columns': [', '.join(y_df.columns[:5]) + '...']
+                }
+
+                pd.DataFrame(info_data).to_excel(writer, sheet_name='info', index=False)
+
+            logger.info(f"✅ Données exportées dans {filename}")
+            return filename
+
+        except Exception as e:
+            logger.error(f"Erreur lors de l'exportation des données en excel : {e}", exc_info=True)
+            return None
+
+
+        
     def train(self, lookback_days: int = 30, epochs: int = 50, batch_size: int = 32) -> bool:
         """
         Entraîne le modèle de prédiction avec améliorations
@@ -258,7 +401,7 @@ class StockModelTrain:
             
             # Sauvegarde du lookback_days pour l'utiliser en prédiction
             self.lookback_days = lookback_days
-            self.sequence_length = lookback_days  # pour compatibilité
+            self.sequence_length = lookback_days # pour compatibilité
             
             # Configuration des dossiers
             model_dir = f"models_saved/{self.symbol}"
@@ -288,18 +431,21 @@ class StockModelTrain:
             
             input_shape = (X_train.shape[1], X_train.shape[2])
             
-            if X_train.shape[0] < 1000:
-                lstm_units1, lstm_units2 = 32, 16
-                logger.info("Architecture légère sélectionnée (petit dataset)")
+            if X_train.shape[0] < 500:
+                lstm_units1, lstm_units2, lstm_units3 = 32, 16, 8
+                logger.info("Architecture légère sélectionnée (petit dataset 32, 16, 8)")
             else:
-                lstm_units1, lstm_units2 = 64, 32
+                lstm_units1, lstm_units2, lstm_units3 = 128, 64, 32
+                logger.info("Architecture sélectionnée (128, 64, 32)")
             
             self.model = ImprovedLSTMPredictorMultiOutput(
                 lstm_units1=lstm_units1,
                 lstm_units2=lstm_units2,
-                dense_units=32,
-                dropout_rate=0.5,
+                lstm_units3=lstm_units3,
+                dense_units=64,
+                dropout_rate=0.3,
                 recurrent_dropout=0.2,
+                l2_reg=0.001,
                 n_outputs=n_outputs
             )
             
@@ -362,6 +508,9 @@ class StockModelTrain:
             
             training_time = (datetime.now() - start_time).total_seconds()
             logger.info(f"Temps d'entraînement: {training_time:.2f} secondes")
+            # Après l'entraînement, vers la fin de la méthode train()
+            if X_test is not None and y_test is not None:
+                self.validate_on_test(X_test, y_test)
             
             train_metrics = self.model.evaluate(X_train, y_train, verbose=0, return_dict=True)
             val_metrics = self.model.evaluate(X_test, y_test, verbose=0, return_dict=True)
@@ -398,7 +547,6 @@ class StockModelTrain:
             
             self._save_metrics(metrics, model_dir)
             self._plot_training_history(history, model_dir, timestamp)
-
             del X_train, y_train, X_test, y_test
             gc.collect()
             
@@ -408,6 +556,29 @@ class StockModelTrain:
         except Exception as e:
             logger.error(f"Erreur lors de l'entraînement: {e}", exc_info=True)
             return False
+    
+    def validate_on_test(self, X_test_seq, y_test_seq):
+        """
+        Compare les prédictions du modèle sur l'ensemble de test avec les valeurs réelles.
+        X_test_seq : séquences d'entrée pour le test (shape: nb_seq, lookback, n_features)
+        y_test_seq : cibles correspondantes (shape: nb_seq, n_targets)
+        """
+        if self.model is None:
+            logger.error("Modèle non entraîné")
+            return
+        
+        y_pred_scaled = self.model.predict(X_test_seq, verbose=0)
+        y_pred = self.target_scaler.inverse_transform(y_pred_scaled)
+        y_true = self.target_scaler.inverse_transform(y_test_seq) # y_test_seq est déjà scaled
+        
+        logger.info("=== Validation sur données de test ===")
+        for i, col in enumerate(self.target_columns):
+            if 'Target_Close' in col: # On se concentre sur les prix de clôture futurs
+                mae = np.mean(np.abs(y_pred[:, i] - y_true[:, i]))
+                logger.info(f"MAE pour {col} : {mae:.2f}")
+                # Afficher les 3 premiers exemples
+                for j in range(min(3, len(y_pred))):
+                    logger.info(f" Exemple {j}: prédit={y_pred[j, i]:.2f}, réel={y_true[j, i]:.2f}")
     
     def _save_metrics(self, metrics: Dict[str, Any], save_dir: str):
         """Sauvegarde les métriques d'entraînement"""
@@ -515,8 +686,10 @@ class StockModelTrain:
             if len(features_aligned) < self.lookback_days:
                 logger.error(f"Pas assez de données : besoin de {self.lookback_days} jours, disponible {len(features_aligned)}")
                 return {}
-        
+            excel_file = self.export_training_data()
             recent_data = features_aligned.iloc[-self.lookback_days:]
+            logger.info(f"Dernières dates: {recent_data.index[-1]}")
+            logger.info(f"Valeurs manquantes dans recent_data: {recent_data.isna().sum().sum()}")
             scaled_data = self.feature_scaler.transform(recent_data)
             X_pred = scaled_data.reshape(1, self.lookback_days, -1)
         
@@ -618,13 +791,12 @@ class StockModelTrain:
             for horizon, pred in predictions.items():
                 if pred is not None:
                     change_pct = ((pred - self.current_price) / self.current_price * 100)
-                    print(f"  {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
+                    print(f" {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
             
             print("\nNote: Le dashboard interactif sera disponible avec le module dashboard.py")
             
         except Exception as e:
             logger.error(f"Erreur stockmodeltrain.create_dashboard: {e}")
-
 
 def main():
     """Fonction principale d'exécution dans stockmodeltrain"""
@@ -679,16 +851,16 @@ def main():
         
         if 'error' not in results:
             print(f"\n📊 RÉSULTATS POUR {symbol}:")
-            print(f"   Prix actuel: ${results['current_price']:.2f}")
-            print(f"   Score de trading: {results['trading_score']:.1f}/10")
-            print(f"   Recommandation: {results['recommendation']}")
+            print(f" Prix actuel: ${results['current_price']:.2f}")
+            print(f" Score de trading: {results['trading_score']:.1f}/10")
+            print(f" Recommandation: {results['recommendation']}")
             
             predictions = results['predictions']
-            print(f"\n   Prédictions de prix:")
+            print(f"\n Prédictions de prix:")
             for horizon, pred in predictions.items():
                 if pred is not None:
                     change_pct = ((pred - results['current_price']) / results['current_price'] * 100)
-                    print(f"     {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
+                    print(f" {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
             
             if option_choice == '1':
                 print("\n📈 Création du dashboard...")
@@ -704,7 +876,6 @@ def main():
     
     print(f"\n⏱️ Analyse terminée en {duration:.1f} secondes")
     print("="*60)
-
 
 if __name__ == "__main__":
     main()

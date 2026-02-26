@@ -1,11 +1,9 @@
 """
 Module avancé pour les prédictions et trading d'actions
 """
-
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
 import sys
 import pickle
 import numpy as np
@@ -16,21 +14,17 @@ import logging
 import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple, Union
-
 from sklearn.preprocessing import StandardScaler
 import warnings
 warnings.filterwarnings('ignore')
-
 # Import des modules internes
 from trading_algo.data.data_extraction import StockDataExtractor, get_stock_overview, MacroDataExtractor
 from trading_algo.visualization.dashboard import TradingDashboard
 from trading_algo.models.base_model import ImprovedLSTMPredictorMultiOutput
 from trading_algo.models.stockmodeltrain import StockModelTrain
 from trading_algo.risk.risk_manager import RiskManager
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 class StockPredictor(StockModelTrain):
     def __init__(self, symbol: str, period: str = "1y"):
@@ -41,6 +35,7 @@ class StockPredictor(StockModelTrain):
         self.risk_tolerance = 0.1
         self.risk_manager = RiskManager()
         self.risk_metrics = None
+        self.market_data_extractor = StockDataExtractor()  # Pour récupérer les données de marché
         logger.info(f"StockPredictor avancé initialisé pour {symbol}")
 
     def analyze_stock_advanced(self) -> Dict[str, Any]:
@@ -48,41 +43,80 @@ class StockPredictor(StockModelTrain):
         try:
             if not self.fetch_data():
                 return {"error": "Échec de la récupération des données"}
-        
+
             if self.model is None:
                 logger.info("Entraînement du modèle...")
                 if not self.train(epochs=30, lookback_days=60):
                     return {"error": "Échec de l'entraînement"}
-        
+
             logger.info("Génération des prédictions avancées...")
             predictions_dict = self.generate_predictions()
-        
-            # Calcul des métriques de risque
+
+            # Initialisation des métriques de risque
             risk_metrics = {}
+
             if self.data is not None and not self.data.empty:
                 returns = self.data['Close'].pct_change().dropna()
+
+                # Récupération des données de marché pour le bêta (S&P 500)
+                market_data = self.market_data_extractor.get_historical_data('^GSPC', self.period)
+                if market_data is not None and not market_data.empty:
+                    market_returns = market_data['Close'].pct_change().dropna()
+                    # Alignement des séries
+                    common_index = returns.index.intersection(market_returns.index)
+                    stock_returns_aligned = returns.loc[common_index]
+                    market_returns_aligned = market_returns.loc[common_index]
+                    risk_metrics['beta'] = self.risk_manager.calculate_beta(
+                        stock_returns_aligned, market_returns_aligned
+                    )
+
+                # Métriques de risque standards
                 risk_metrics['sharpe_ratio'] = self.risk_manager.calculate_sharpe_ratio(returns)
                 risk_metrics['max_drawdown'] = self.risk_manager.calculate_max_drawdown(self.data['Close'])
-                risk_metrics['atr_stop'] = self.risk_manager.calculate_atr_stop(self.data)
-                
-                # Niveaux de stop-loss et take-profit basés sur les prédictions
+                risk_metrics['value_at_risk'] = self.risk_manager.calculate_value_at_risk(
+                    returns, self.confidence_level
+                )
+
+                # Calcul unique des niveaux ATR (basé sur les données actuelles)
+                stop_loss_base, take_profit_base = self.risk_manager.calculate_atr_levels(self.data)
+
+                # Préparation des dictionnaires pour chaque horizon de prédiction
                 stop_loss_levels = {}
                 take_profit_levels = {}
+                risk_reward_ratios = {}
+                position_sizes = {}
+
+                # Paramètres pour le sizing
+                account_balance = 100000.0  # À rendre paramétrable si besoin
+                risk_tolerance = getattr(self, 'risk_tolerance', 0.02)  # 2% par défaut
+
                 for horizon, pred_price in predictions_dict.items():
                     if pred_price is not None and self.current_price > 0:
-                        # Pour une position longue (achat)
-                        stop_loss = self.current_price * 0.98  # stop à -2%
-                        take_profit = pred_price  # objectif = prix prédit
-                        stop_loss_levels[horizon] = round(stop_loss, 2)
-                        take_profit_levels[horizon] = round(take_profit, 2)
+                        if stop_loss_base is not None and take_profit_base is not None:
+                            entry = self.current_price
+                            stop_loss_levels[horizon] = round(stop_loss_base, 2)
+                            take_profit_levels[horizon] = round(take_profit_base, 2)
+                            risk_reward_ratios[horizon] = self.risk_manager.risk_reward_ratio(
+                                entry, stop_loss_base, pred_price
+                            )
+                            position_sizes[horizon] = self.risk_manager.suggest_position_size(
+                                account_balance, entry, stop_loss_base, risk_tolerance
+                            )
+
+                # Ajout des dictionnaires dans risk_metrics
                 risk_metrics['stop_loss_levels'] = stop_loss_levels
                 risk_metrics['take_profit_levels'] = take_profit_levels
+                risk_metrics['risk_reward_ratios'] = risk_reward_ratios
+                risk_metrics['suggested_position_sizes'] = position_sizes
 
-            self.risk_metrics = risk_metrics  # Stocker pour usage ultérieur
-        
+            # Sauvegarde pour usage ultérieur
+            self.risk_metrics = risk_metrics
+
+            # Calcul du score et de la recommandation
             self.trading_score = self.calculate_trading_score(predictions_dict)
             self.recommendation = self.generate_recommendation(self.trading_score)
-        
+
+            # Construction du résultat final
             results = {
                 "symbol": self.symbol,
                 "current_price": self.current_price,
@@ -90,24 +124,24 @@ class StockPredictor(StockModelTrain):
                 "recommendation": self.recommendation,
                 "predictions": predictions_dict,
                 "technical_indicators": self._get_technical_summary(),
-                "risk_metrics": risk_metrics,  # Utilisation de la variable locale
+                "risk_metrics": risk_metrics,
                 "market_context": self._get_market_context(),
                 "analysis_date": datetime.now().isoformat()
             }
-        
+
             logger.info(f"✅ Analyse avancée terminée pour {self.symbol}")
             return results
-        
-        except Exception as e:
-            logger.error(f"❌ Erreur analyse avancée: {e}", exc_info=True)
-            return {"error": str(e), "symbol": self.symbol}
 
+        except Exception as e:
+            logger.error(f"Erreur lors de l'analyse avancée avancée de {self.symbol}: {e}")
+            return {"error": str(e)}
+       
     def _log_technical_indicators(self):
         """Affiche les dernières valeurs des indicateurs techniques clés"""
         if self.features is None or self.features.empty:
             logger.warning("Aucune donnée technique disponible")
             return
-    
+
         last_row = self.features.iloc[-1]
         indicators = {
             'RSI (14)': last_row.get('RSI', 'N/A'),
@@ -120,19 +154,19 @@ class StockPredictor(StockModelTrain):
             'Volume': last_row.get('Volume', 'N/A'),
             'Momentum 10j': last_row.get('Momentum_10', 'N/A')
         }
-    
+
         logger.info("📊 Indicateurs techniques récents :")
         for name, value in indicators.items():
             if value != 'N/A' and not pd.isna(value):
                 if 'SMA' in name or 'ATR' in name:
-                    logger.info(f"   {name}: {value:.2f}")
+                    logger.info(f" {name}: {value:.2f}")
                 elif 'RSI' in name:
                     status = "Surachat ⚠️" if value > 70 else "Survente ✅" if value < 30 else "Neutre"
-                    logger.info(f"   {name}: {value:.2f} ({status})")
+                    logger.info(f" {name}: {value:.2f} ({status})")
                 elif 'MACD' in name and value != 'N/A':
-                    logger.info(f"   {name}: {value:.4f}")
+                    logger.info(f" {name}: {value:.4f}")
                 else:
-                    logger.info(f"   {name}: {value}")
+                    logger.info(f" {name}: {value}")
 
     def predict_future(
         self,
@@ -140,13 +174,14 @@ class StockPredictor(StockModelTrain):
         confidence_level: float = 0.95,
         scenario_analysis: bool = True,
         include_sentiment: bool = True,
-        ensemble_method: str = "weighted"
+        ensemble_method: str = "weighted",
+        account_balance: float = 100000.0  # Ajout pour le sizing de position
     ) -> Dict[str, Any]:
         """
-        Prédit les prix futurs et génère des signaux de trading.
+        Prédit les prix futurs et génère des signaux de trading avec gestion des risques intégrée.
         """
         logger.info(f"🔮 Début de la prédiction pour {days_ahead} jours à venir")
-    
+
         try:
             if days_ahead <= 0:
                 raise ValueError("days_ahead doit être > 0")
@@ -156,26 +191,26 @@ class StockPredictor(StockModelTrain):
                 raise ValueError("Aucun modèle entraîné disponible")
             if self.data is None or len(self.data) < 100:
                 raise ValueError("Données historiques insuffisantes")
-        
+
             logger.info("Préparation des données pour la prédiction...")
             recent_data = self.data.tail(min(252, len(self.data)))
-        
+
             features_df = self._prepare_prediction_features(
-                recent_data, 
+                recent_data,
                 include_sentiment=include_sentiment
             )
-        
+
             if features_df.empty or len(features_df) < 50:
                 logger.warning("Features insuffisantes pour la prédiction")
                 return self._get_empty_prediction_result()
-        
+
             logger.info(f"Génération des prédictions avec méthode {ensemble_method}...")
             predictions = self._generate_predictions(
-                features_df, 
-                days_ahead, 
+                features_df,
+                days_ahead,
                 method=ensemble_method
             )
-        
+
             # --- Interpolation des prédictions ponctuelles ---
             try:
                 point_preds = self.generate_predictions()
@@ -195,19 +230,20 @@ class StockPredictor(StockModelTrain):
                     logger.warning("Pas assez de points pour l'interpolation, utilisation des prédictions brutes")
             except Exception as e:
                 logger.warning(f"Erreur lors de l'interpolation: {e}, utilisation des prédictions brutes")
-        
+
             confidence_intervals = self._calculate_confidence_intervals(
-                predictions, 
+                predictions,
                 confidence_level
             )
-        
-            logger.info("Génération des signaux de trading...")
+
+            logger.info("Génération des signaux de trading avec gestion des risques...")
             trading_signals = self._generate_trading_signals(
                 predictions,
                 confidence_intervals,
-                recent_data
+                recent_data,
+                account_balance
             )
-        
+
             scenarios = None
             if scenario_analysis:
                 logger.info("Analyse de scénarios...")
@@ -216,27 +252,27 @@ class StockPredictor(StockModelTrain):
                     days_ahead,
                     predictions
                 )
-        
+
             logger.info("Calcul des métriques de performance...")
             metrics = self._calculate_prediction_metrics(
                 predictions,
                 trading_signals,
                 recent_data
             )
-        
+
             result_df = self._format_predictions_to_dataframe(
                 predictions,
                 confidence_intervals,
                 recent_data,
                 days_ahead
             )
-        
+
             self._log_technical_indicators()
-        
+
             self._save_prediction_history(result_df, metrics)
-        
+
             logger.info(f"✅ Prédiction terminée: {len(trading_signals['signals'])} signaux générés")
-        
+
             return {
                 'predictions': result_df,
                 'signals': trading_signals,
@@ -247,11 +283,11 @@ class StockPredictor(StockModelTrain):
                 'prediction_date': pd.Timestamp.now(),
                 'horizon_days': days_ahead
             }
-        
+
         except Exception as e:
             logger.error(f"❌ Erreur lors de la prédiction: {str(e)}", exc_info=True)
             return self._handle_prediction_error(e)
-    
+
     def _prepare_prediction_features(self, data: pd.DataFrame, include_sentiment: bool = True) -> pd.DataFrame:
         try:
             if self.features is None or self.features.empty:
@@ -259,42 +295,42 @@ class StockPredictor(StockModelTrain):
                 features_df = self.data_extractor.calculate_technical_indicators(data.copy())
             else:
                 features_df = self.features.copy()
-        
+
             if include_sentiment and hasattr(self, 'sentiment_data'):
                 pass
-        
+
             if not hasattr(self.feature_scaler, 'feature_names_in_'):
                 logger.error("Scaler non entraîné")
                 return pd.DataFrame()
-        
+
             expected_cols = list(self.feature_scaler.feature_names_in_)
             missing = set(expected_cols) - set(features_df.columns)
             if missing:
                 logger.error(f"Colonnes manquantes : {missing}")
                 return pd.DataFrame()
-        
+
             features_df = features_df[expected_cols]
-        
+
             scaled = self.feature_scaler.transform(features_df)
             if np.any(np.isnan(scaled)) or np.any(np.isinf(scaled)):
                 logger.warning("NaN/inf dans les données normalisées, remplacement par 0")
                 scaled = np.nan_to_num(scaled, nan=0.0, posinf=0.0, neginf=0.0)
-        
+
             result_df = pd.DataFrame(
                 scaled.astype(np.float32),
                 index=features_df.index,
                 columns=expected_cols
             )
             return result_df
-        
+
         except Exception as e:
             logger.error(f"Erreur préparation features: {e}")
             return pd.DataFrame()
-    
+
     def _generate_predictions(self, features_df: pd.DataFrame, days_ahead: int, method: str = "weighted") -> Dict:
         """Génère des prédictions avec différentes méthodes."""
         predictions = {}
-        
+
         if self.model is not None:
             try:
                 X_input = self._prepare_model_input(features_df)
@@ -304,13 +340,13 @@ class StockPredictor(StockModelTrain):
                     predictions['main_model'] = np.full(days_ahead, base_pred)
             except Exception as e:
                 logger.error(f"Erreur prédiction modèle principal: {e}")
-        
+
         try:
             simple_pred = self._simple_prediction(features_df, days_ahead)
             predictions['simple_model'] = simple_pred
         except Exception as e:
             logger.error(f"Erreur prédiction simple: {e}")
-        
+
         if method == "weighted" and len(predictions) > 0:
             final_pred = self._weighted_ensemble(predictions)
         elif method == "average" and len(predictions) > 0:
@@ -322,13 +358,13 @@ class StockPredictor(StockModelTrain):
                 final_pred = predictions['simple_model']
             else:
                 final_pred = np.zeros(days_ahead)
-        
+
         return {
             'individual': predictions,
             'ensemble': final_pred,
             'method': method
         }
-    
+
     def _prepare_model_input(self, features_df: pd.DataFrame) -> np.ndarray:
         try:
             sequence_length = getattr(self, 'lookback_days', 60)
@@ -340,16 +376,16 @@ class StockPredictor(StockModelTrain):
                 features_array = np.vstack([pad_values, features_df.values])
             else:
                 features_array = features_df.iloc[-sequence_length:].values
-            
+
             if hasattr(self, 'feature_scaler') and self.feature_scaler is not None:
                 features_array = self.feature_scaler.transform(features_array)
-            
+
             return features_array.reshape(1, sequence_length, -1)
-            
+
         except Exception as e:
             logger.error(f"Erreur préparation input modèle: {e}")
             return None
-    
+
     def _simple_prediction(self, features_df: pd.DataFrame, days_ahead: int) -> np.ndarray:
         try:
             recent_prices = features_df['Close'].values if 'Close' in features_df.columns else features_df.iloc[:, 0].values
@@ -367,7 +403,7 @@ class StockPredictor(StockModelTrain):
         except Exception as e:
             logger.error(f"Erreur prédiction simple: {e}")
             return np.zeros(days_ahead)
-    
+
     def _weighted_ensemble(self, predictions: Dict) -> np.ndarray:
         weights = {'main_model': 0.7, 'simple_model': 0.3}
         weighted_sum = None
@@ -385,7 +421,7 @@ class StockPredictor(StockModelTrain):
             return weighted_sum / total_weight
         else:
             return list(predictions.values())[0] if predictions else np.array([])
-    
+
     def _average_ensemble(self, predictions: Dict) -> np.ndarray:
         all_preds = list(predictions.values())
         if not all_preds:
@@ -395,7 +431,7 @@ class StockPredictor(StockModelTrain):
         for pred in all_preds:
             avg_pred += pred[:min_len]
         return avg_pred / len(all_preds)
-    
+
     def _calculate_confidence_intervals(self, predictions: Dict, confidence_level: float = 0.95) -> Dict:
         try:
             individual_preds = predictions.get('individual', {})
@@ -419,8 +455,8 @@ class StockPredictor(StockModelTrain):
         except Exception as e:
             logger.error(f"Erreur calcul intervalles confiance: {e}")
             return {}
-    
-    def _generate_trading_signals(self, predictions: Dict, confidence_intervals: Dict, recent_data: pd.DataFrame) -> Dict:
+
+    def _generate_trading_signals(self, predictions: Dict, confidence_intervals: Dict, recent_data: pd.DataFrame, account_balance: float) -> Dict:
         try:
             if 'Close' not in recent_data.columns:
                 return {'error': 'Données de prix manquantes'}
@@ -435,6 +471,10 @@ class StockPredictor(StockModelTrain):
                     expected_return = (pred_price - current_price) / current_price
                     signal = self._determine_signal(expected_return, horizon)
                     stop_loss, take_profit = self._calculate_risk_levels(current_price, signal, horizon)
+                    risk_reward = self.risk_manager.risk_reward_ratio(current_price, stop_loss, take_profit)
+                    position_size = self.risk_manager.suggest_position_size(
+                        account_balance, current_price, stop_loss, self.risk_tolerance
+                    )
                     signals.append({
                         'horizon': horizon,
                         'predicted_price': pred_price,
@@ -442,6 +482,8 @@ class StockPredictor(StockModelTrain):
                         'signal': signal,
                         'stop_loss': stop_loss,
                         'take_profit': take_profit,
+                        'risk_reward_ratio': risk_reward,
+                        'suggested_position_size': position_size,
                         'confidence': confidence_intervals.get('confidence_level', 0.95)
                     })
             overall_signal = self._calculate_overall_signal(signals)
@@ -454,7 +496,7 @@ class StockPredictor(StockModelTrain):
         except Exception as e:
             logger.error(f"Erreur génération signaux: {e}")
             return {'error': str(e)}
-    
+
     def _determine_signal(self, expected_return: float, horizon: int) -> str:
         if horizon <= 5:
             threshold = 0.02
@@ -468,25 +510,28 @@ class StockPredictor(StockModelTrain):
             return "SELL"
         else:
             return "HOLD"
-    
+
     def _calculate_risk_levels(self, current_price: float, signal: str, horizon: int) -> Tuple[float, float]:
-        if horizon <= 5:
-            risk_multiplier = 1.0
-        elif horizon <= 20:
-            risk_multiplier = 1.5
-        else:
-            risk_multiplier = 2.0
-        if signal == "BUY":
-            stop_loss = current_price * (1 - 0.02 * risk_multiplier)
-            take_profit = current_price * (1 + 0.04 * risk_multiplier)
-        elif signal == "SELL":
-            stop_loss = current_price * (1 + 0.02 * risk_multiplier)
-            take_profit = current_price * (1 - 0.04 * risk_multiplier)
-        else:
-            stop_loss = current_price * (1 - 0.01 * risk_multiplier)
-            take_profit = current_price * (1 + 0.02 * risk_multiplier)
+        # Utilisation de l'ATR pour des niveaux dynamiques
+        atr_multiplier_stop = 1.5 if horizon <= 5 else 2.0 if horizon <= 20 else 2.5
+        atr_multiplier_take = 2.5 if horizon <= 5 else 3.0 if horizon <= 20 else 4.0
+        stop_loss, take_profit = self.risk_manager.calculate_atr_levels(
+            self.data, atr_multiplier_stop, atr_multiplier_take
+        )
+        if stop_loss is None or take_profit is None:
+            # Fallback sur pourcentages fixes si ATR non disponible
+            risk_multiplier = 1.0 if horizon <= 5 else 1.5 if horizon <= 20 else 2.0
+            if signal == "BUY":
+                stop_loss = current_price * (1 - 0.02 * risk_multiplier)
+                take_profit = current_price * (1 + 0.04 * risk_multiplier)
+            elif signal == "SELL":
+                stop_loss = current_price * (1 + 0.02 * risk_multiplier)
+                take_profit = current_price * (1 - 0.04 * risk_multiplier)
+            else:
+                stop_loss = current_price * (1 - 0.01 * risk_multiplier)
+                take_profit = current_price * (1 + 0.02 * risk_multiplier)
         return stop_loss, take_profit
-    
+
     def _calculate_overall_signal(self, signals: List[Dict]) -> Dict:
         if not signals:
             return {'signal': 'NEUTRAL', 'confidence': 0.0}
@@ -511,7 +556,7 @@ class StockPredictor(StockModelTrain):
             'hold_count': hold_count,
             'total_signals': total
         }
-    
+
     def _analyze_scenarios(self, features_df: pd.DataFrame, days_ahead: int, predictions: Dict) -> Dict:
         scenarios = {
             'optimistic': {'multiplier': 1.2, 'probability': 0.25},
@@ -534,7 +579,7 @@ class StockPredictor(StockModelTrain):
                 key=lambda x: x[1]['expected_return'] * x[1]['probability']
             )[0]
         }
-    
+
     def _calculate_prediction_metrics(self, predictions: Dict, signals: Dict, historical_data: pd.DataFrame) -> Dict:
         metrics = {}
         try:
@@ -548,7 +593,8 @@ class StockPredictor(StockModelTrain):
                     'buy_signals': sum(1 for s in signals['signals'] if s.get('signal') == 'BUY'),
                     'sell_signals': sum(1 for s in signals['signals'] if s.get('signal') == 'SELL'),
                     'hold_signals': sum(1 for s in signals['signals'] if s.get('signal') == 'HOLD'),
-                    'avg_expected_return': np.mean([s.get('expected_return', 0) for s in signals['signals']])
+                    'avg_expected_return': np.mean([s.get('expected_return', 0) for s in signals['signals']]),
+                    'avg_risk_reward_ratio': np.mean([s.get('risk_reward_ratio', 0) for s in signals['signals']])
                 }
                 metrics.update(signal_metrics)
             metrics['confidence_score'] = self._calculate_confidence_score(predictions)
@@ -556,7 +602,7 @@ class StockPredictor(StockModelTrain):
         except Exception as e:
             logger.error(f"Erreur calcul métriques: {e}")
             return {'error': str(e)}
-    
+
     def _calculate_confidence_score(self, predictions: Dict) -> float:
         try:
             individual_preds = predictions.get('individual', {})
@@ -574,8 +620,8 @@ class StockPredictor(StockModelTrain):
             return min(1.0, max(0.0, avg_correlation))
         except:
             return 0.5
-    
-    def _format_predictions_to_dataframe(self, predictions: Dict, confidence_intervals: Dict, 
+
+    def _format_predictions_to_dataframe(self, predictions: Dict, confidence_intervals: Dict,
                                          historical_data: pd.DataFrame, days_ahead: int) -> pd.DataFrame:
         try:
             last_date = historical_data.index[-1]
@@ -601,7 +647,7 @@ class StockPredictor(StockModelTrain):
         except Exception as e:
             logger.error(f"Erreur formatage prédictions: {e}")
             return pd.DataFrame()
-    
+
     def _get_empty_prediction_result(self) -> Dict:
         return {
             'predictions': pd.DataFrame(),
@@ -610,7 +656,7 @@ class StockPredictor(StockModelTrain):
             'scenarios': None,
             'error': 'Prédiction impossible'
         }
-    
+
     def _handle_prediction_error(self, error: Exception) -> Dict:
         return {
             'predictions': pd.DataFrame(),
@@ -619,7 +665,7 @@ class StockPredictor(StockModelTrain):
             'scenarios': None,
             'error': str(error)
         }
-    
+
     def _save_prediction_history(self, predictions_df: pd.DataFrame, metrics: Dict):
         try:
             if predictions_df.empty:
@@ -634,11 +680,11 @@ class StockPredictor(StockModelTrain):
             if len(self.prediction_history) > 100:
                 self.prediction_history = self.prediction_history[-100:]
         except Exception as e:
-            logger.error(f"Erreur sauvegarde historique: {e}")
-    
+            logger.error(f"Erreur sauvegarde historique _save_prediction_history: {e}")
+
     def get_prediction_history(self) -> List[Dict]:
         return self.prediction_history
-    
+
     def _get_technical_summary(self) -> Dict:
         try:
             if self.features is None or self.features.empty:
@@ -653,7 +699,7 @@ class StockPredictor(StockModelTrain):
         except Exception as e:
             logger.error(f"Erreur résumé technique: {e}")
             return {}
-    
+
     def _get_market_context(self) -> Dict:
         try:
             context = {}
@@ -666,36 +712,34 @@ class StockPredictor(StockModelTrain):
             logger.error(f"Erreur contexte marché: {e}")
             return {}
 
-
 def main():
     print("🚀 STOCK PREDICTOR - Prédictions Avancées")
     print("=" * 60)
-    
+
     symbol = "AAPL"
     try:
         print(f"\n📈 Analyse avancée de {symbol}")
         print("-" * 40)
-        
+
         predictor = StockPredictor(symbol, period="3y")
         results = predictor.analyze_stock_advanced()
-        
+
         if 'error' in results:
             print(f"❌ Erreur: {results['error']}")
             return
-        
+
         print(f"✅ Analyse terminée!")
-        print(f"   Prix actuel: ${results['current_price']:.2f}")
-        print(f"   Score de trading: {results['trading_score']:.1f}/10")
-        print(f"   Recommandation: {results['recommendation']}")
-        
+        print(f" Prix actuel: ${results['current_price']:.2f}")
+        print(f" Score de trading: {results['trading_score']:.1f}/10")
+        print(f" Recommandation: {results['recommendation']}")
+
         print("\n" + "=" * 60)
         print("✅ Test de StockPredictor terminé avec succès!")
-        
+
     except Exception as e:
         print(f"❌ Erreur lors du test: {e}")
         import traceback
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     main()

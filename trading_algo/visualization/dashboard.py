@@ -12,6 +12,13 @@ import logging
 from typing import Dict, Any, Optional, List, Tuple
 import json
 
+# Constantes
+SMA_PERIODS = [20, 50, 200]
+RSI_OVERBOUGHT = 70
+RSI_OVERSOLD = 30
+ATR_HIGH_THRESHOLD = 3.0
+ATR_MODERATE_THRESHOLD = 1.5
+
 class TradingDashboard:
     """Classe principale pour la création de tableaux de bord trading"""
     
@@ -27,7 +34,7 @@ class TradingDashboard:
         self.recommendation = "NEUTRE"
         self.risk_metrics = None
         self.setup_logging()
-            
+        
     def setup_logging(self):
         logging.basicConfig(
             level=logging.INFO,
@@ -35,7 +42,7 @@ class TradingDashboard:
         )
         self.logger = logging.getLogger(__name__)
     
-    def load_data(self, 
+    def load_data(self,
                   overview: Dict[str, Any],
                   technical_data: pd.DataFrame,
                   predictions_df: pd.DataFrame,
@@ -51,9 +58,6 @@ class TradingDashboard:
         self.macro_data = macro_data or {}
         self.market_sentiment = market_sentiment or {}
         self.risk_metrics = risk_metrics or {}
-        self.score = score
-        self.recommendation = recommendation
-
         if score is not None and recommendation is not None:
             self.score = score
             self.recommendation = recommendation
@@ -61,7 +65,7 @@ class TradingDashboard:
             self._calculate_score_and_recommendation()
     
         self.logger.info(f"Données chargées pour {self.symbol}")
-
+    
     def _calculate_score_and_recommendation(self):
         """Calcule le score et la recommandation basés sur les données"""
         try:
@@ -70,9 +74,9 @@ class TradingDashboard:
                 last_row = self.technical_data.iloc[-1]
                 if 'RSI' in last_row:
                     rsi = last_row['RSI']
-                    if rsi < 30:
+                    if rsi < RSI_OVERSOLD:
                         tech_score += 2
-                    elif rsi > 70:
+                    elif rsi > RSI_OVERBOUGHT:
                         tech_score -= 2
                 if 'MACD' in last_row and 'MACD_Signal' in last_row:
                     if last_row['MACD'] > last_row['MACD_Signal']:
@@ -80,6 +84,19 @@ class TradingDashboard:
                 if 'SMA_50' in last_row and 'SMA_200' in last_row:
                     if last_row['SMA_50'] > last_row['SMA_200']:
                         tech_score += 1
+            
+            # Intégration des métriques de risque dans le score
+            if self.risk_metrics:
+                if 'sharpe_ratio' in self.risk_metrics:
+                    sr = self.risk_metrics['sharpe_ratio']
+                    tech_score += max(min(sr, 2), -2)  # Ajustement basé sur Sharpe
+                if 'beta' in self.risk_metrics:
+                    beta = self.risk_metrics['beta']
+                    if beta > 1.5:
+                        tech_score -= 1  # Pénalité pour volatilité élevée
+                    elif beta < 0.5:
+                        tech_score += 1  # Bonus pour stabilité
+            
             self.score = min(10, max(1, tech_score))
             
             if self.score >= 7.5:
@@ -96,123 +113,138 @@ class TradingDashboard:
             self.logger.error(f"Erreur calcul score: {e}")
             self.score = 5.0
             self.recommendation = "NEUTRE ⚪"
-
+    
+    def _add_technical_summary(self, all_rows):
+        """Ajoute la section des indicateurs techniques au tableau récapitulatif"""
+        df = self.technical_data
+        last_row = df.iloc[-1] if df is not None and not df.empty else {}
+        
+        tech_rows = []
+        tech_rows.append(["Prix actuel", f"${self.current_price:.2f}", "-"])
+        
+        if 'RSI' in last_row:
+            rsi = last_row['RSI']
+            interpretation = "Surachat ⚠️" if rsi > RSI_OVERBOUGHT else "Survente ✅" if rsi < RSI_OVERSOLD else "Neutre"
+            tech_rows.append(["RSI (14)", f"{rsi:.1f}", interpretation])
+        
+        if 'MACD' in last_row and 'MACD_Signal' in last_row:
+            macd = last_row['MACD']
+            signal = last_row['MACD_Signal']
+            status = "Haussier 📈" if macd > signal else "Baissier 📉"
+            tech_rows.append(["MACD", f"{macd:.2f}", status])
+        
+        if 'SMA_50' in last_row and 'SMA_200' in last_row:
+            sma_50 = last_row['SMA_50']
+            sma_200 = last_row['SMA_200']
+            cross = "Croisement doré ✅" if sma_50 > sma_200 else "Croisement mortel ⚠️"
+            tech_rows.append(["SMA 50/200", f"{sma_50:.2f}/{sma_200:.2f}", cross])
+        
+        if 'ATR' in last_row:
+            atr_pct = (last_row['ATR'] / self.current_price) * 100
+            vol_status = ("Élevée ⚠️" if atr_pct > ATR_HIGH_THRESHOLD 
+                         else "Modérée ⚖️" if atr_pct > ATR_MODERATE_THRESHOLD 
+                         else "Faible ✅")
+            tech_rows.append(["Volatilité (ATR%)", f"{atr_pct:.1f}%", vol_status])
+        
+        all_rows.extend(tech_rows)
+        all_rows.append(["--- RISQUE ---", "---", "---"])
+    
+    def _add_risk_summary(self, all_rows):
+        """Ajoute la section des métriques de risque au tableau récapitulatif"""
+        risk_rows = []
+        if self.risk_metrics:
+            if 'sharpe_ratio' in self.risk_metrics:
+                sr = self.risk_metrics['sharpe_ratio']
+                sr_status = "Bon ✅" if sr > 1 else "Médiocre ⚠️" if sr > 0 else "Négatif 🔴"
+                risk_rows.append(["Sharpe Ratio", f"{sr:.2f}", sr_status])
+            
+            if 'max_drawdown' in self.risk_metrics:
+                mdd = self.risk_metrics['max_drawdown'] * 100
+                mdd_status = ("Élevé ⚠️" if abs(mdd) > 20 
+                             else "Modéré ⚖️" if abs(mdd) > 10 
+                             else "Faible ✅")
+                risk_rows.append(["Max Drawdown", f"{mdd:.1f}%", mdd_status])
+            
+            if 'value_at_risk' in self.risk_metrics:
+                var = self.risk_metrics['value_at_risk'] * 100
+                var_status = "Élevé ⚠️" if abs(var) > 5 else "Modéré ⚖️"
+                risk_rows.append(["VaR (95%)", f"{var:.1f}%", var_status])
+            
+            if 'beta' in self.risk_metrics:
+                beta = self.risk_metrics['beta']
+                beta_status = "Aggressif 📈" if beta > 1 else "Défensif 🛡️" if beta < 1 else "Neutre ⚖️"
+                risk_rows.append(["Bêta", f"{beta:.2f}", beta_status])
+            
+            if 'stop_loss_levels' in self.risk_metrics:
+                for horizon, stop in self.risk_metrics['stop_loss_levels'].items():
+                    risk_rows.append([f"Stop {horizon}", f"${stop:.2f}", ""])
+            if 'take_profit_levels' in self.risk_metrics:
+                for horizon, tp in self.risk_metrics['take_profit_levels'].items():
+                    risk_rows.append([f"Target {horizon}", f"${tp:.2f}", ""])
+            if 'risk_reward_ratios' in self.risk_metrics:
+                for horizon, rr in self.risk_metrics['risk_reward_ratios'].items():
+                    rr_status = "Favorable ✅" if rr > 2 else "Neutre ⚖️" if rr > 1 else "Risqué ⚠️"
+                    risk_rows.append([f"R/R {horizon}", f"{rr:.2f}", rr_status])
+            if 'suggested_position_sizes' in self.risk_metrics:
+                for horizon, size in self.risk_metrics['suggested_position_sizes'].items():
+                    risk_rows.append([f"Position {horizon}", f"{size:.0f} actions", ""])
+        
+        all_rows.extend(risk_rows)
+    
+    def _add_economic_summary(self, all_rows):
+        """Ajoute la section des indicateurs économiques au tableau récapitulatif"""
+        econ_rows = []
+        if self.macro_data and 'economic_indicators' in self.macro_data:
+            econ = self.macro_data['economic_indicators']
+            for name, data in econ.items():
+                if isinstance(data, dict) and 'value' in data:
+                    value = data['value']
+                    unit = data.get('unit', '')
+                    if isinstance(value, (int, float)):
+                        value_str = f"{value:,.2f} {unit}".strip()
+                    else:
+                        value_str = f"{value} {unit}".strip()
+                    econ_rows.append([name, value_str, ""])
+        if econ_rows:
+            all_rows.append(["--- ÉCONOMIE ---", "---", "---"])
+            all_rows.extend(econ_rows)
+    
     def _add_summary_table(self, fig, row, col):
         """Ajoute un tableau récapitulatif des indicateurs et métriques de risque"""
-        try:
-            df = self.technical_data
-            last_row = df.iloc[-1] if df is not None and not df.empty else {}
-            
-            # Section indicateurs techniques
-            tech_rows = []
-            tech_rows.append(["Prix actuel", f"${self.current_price:.2f}", "-"])
-            
-            if 'RSI' in last_row:
-                rsi = last_row['RSI']
-                interpretation = "Surachat ⚠️" if rsi > 70 else "Survente ✅" if rsi < 30 else "Neutre ⚖️"
-                tech_rows.append(["RSI (14)", f"{rsi:.1f}", interpretation])
-            
-            if 'MACD' in last_row and 'MACD_Signal' in last_row:
-                macd = last_row['MACD']
-                signal = last_row['MACD_Signal']
-                status = "Haussier 📈" if macd > signal else "Baissier 📉"
-                tech_rows.append(["MACD", f"{macd:.2f}", status])
-            
-            if 'SMA_50' in last_row and 'SMA_200' in last_row:
-                sma_50 = last_row['SMA_50']
-                sma_200 = last_row['SMA_200']
-                cross = "Croisement doré ✅" if sma_50 > sma_200 else "Croisement mortel ⚠️"
-                tech_rows.append(["SMA 50/200", f"{sma_50:.2f}/{sma_200:.2f}", cross])
-            
-            if 'ATR' in last_row:
-                atr_pct = (last_row['ATR'] / self.current_price) * 100
-                vol_status = "Élevée ⚠️" if atr_pct > 3 else "Modérée ⚖️" if atr_pct > 1.5 else "Faible ✅"
-                tech_rows.append(["Volatilité (ATR%)", f"{atr_pct:.1f}%", vol_status])
-            
-            # Section métriques de risque
-            risk_rows = []
-            if self.risk_metrics:
-                if 'sharpe_ratio' in self.risk_metrics:
-                    sr = self.risk_metrics['sharpe_ratio']
-                    sr_status = "Bon" if sr > 1 else "Médiocre" if sr > 0 else "Négatif"
-                    risk_rows.append(["Sharpe Ratio", f"{sr:.2f}", sr_status])
-                
-                if 'max_drawdown' in self.risk_metrics:
-                    mdd = self.risk_metrics['max_drawdown'] * 100
-                    risk_rows.append(["Max Drawdown", f"{mdd:.1f}%", ""])
-                
-                if 'atr_stop' in self.risk_metrics and self.risk_metrics['atr_stop']:
-                    stop = self.risk_metrics['atr_stop']
-                    risk_rows.append(["Stop ATR (2x)", f"${stop:.2f}", ""])
-                
-                if 'stop_loss_levels' in self.risk_metrics:
-                    for horizon, stop in self.risk_metrics['stop_loss_levels'].items():
-                        risk_rows.append([f"Stop {horizon}", f"${stop:.2f}", ""])
-                if 'take_profit_levels' in self.risk_metrics:
-                    for horizon, tp in self.risk_metrics['take_profit_levels'].items():
-                        risk_rows.append([f"Target {horizon}", f"${tp:.2f}", ""])
-            
-            # --- NOUVELLE SECTION : Indicateurs économiques ---
-            econ_rows = []
-            if self.macro_data and 'economic_indicators' in self.macro_data:
-                econ = self.macro_data['economic_indicators']
-                for name, data in econ.items():
-                    if isinstance(data, dict) and 'value' in data:
-                        value = data['value']
-                        unit = data.get('unit', '')
-                        # Formater joliment
-                        if isinstance(value, (int, float)):
-                            value_str = f"{value:,.2f} {unit}".strip()
-                        else:
-                            value_str = f"{value} {unit}".strip()
-                        econ_rows.append([name, value_str, ""])
-            # --- NOUVELLE SECTION : Indicateurs économiques ---
-            econ_rows = []
-            if self.macro_data and 'economic_indicators' in self.macro_data:
-                econ = self.macro_data['economic_indicators']
-                for name, data in econ.items():
-                    if isinstance(data, dict) and 'value' in data:
-                        value = data['value']
-                        unit = data.get('unit', '')
-                        # Formater joliment
-                        if isinstance(value, (int, float)):
-                            value_str = f"{value:,.2f} {unit}".strip()
-                        else:
-                            value_str = f"{value} {unit}".strip()
-                        econ_rows.append([name, value_str, ""])
+        if self.technical_data is None or self.technical_data.empty:
+            self.logger.warning("Pas de données techniques pour le tableau récapitulatif")
+            return
         
-            # Fusion des sections
-            all_rows = tech_rows + [["---", "---", "---"]] + risk_rows
-            if econ_rows:
-                all_rows += [["--- ÉCONOMIE ---", "", ""]] + econ_rows
-            all_rows.append(["Score trading", f"{self.score}/10", self.recommendation])
+        all_rows = []
+        self._add_technical_summary(all_rows)
+        self._add_risk_summary(all_rows)
+        self._add_economic_summary(all_rows)
+        all_rows.append(["Score trading", f"{self.score}/10", self.recommendation])
         
-            headers = ["Indicateur", "Valeur", "Interprétation"]
-            fig.add_trace(
-                go.Table(
-                    header=dict(values=headers, fill_color='paleturquoise', align='left'),
-                    cells=dict(values=list(zip(*all_rows)), fill_color='lavender', align='left')
-                ),
-                row=row, col=col
-            )
-        except Exception as e:
-            self.logger.error(f"Erreur ajout table de sommaire: {e}")
-
+        headers = ["Indicateur", "Valeur", "Interprétation"]
+        fig.add_trace(
+            go.Table(
+                header=dict(values=headers, fill_color='paleturquoise', align='left'),
+                cells=dict(values=list(zip(*all_rows)), fill_color='lavender', align='left')
+            ),
+            row=row, col=col
+        )
+    
     def create_main_dashboard(self, save_path: str = "dashboards") -> Optional[go.Figure]:
-        """Crée le tableau de bord principal interactif"""
         if self.technical_data is None or self.technical_data.empty:
             self.logger.error("Données techniques manquantes")
             return None
-        
+    
         try:
             fig = make_subplots(
-                rows=5, cols=3,
+                rows=6, cols=3,
                 specs=[
-                    [{'type': 'scatter', 'rowspan': 2, 'colspan': 2}, None, {'type': 'indicator'}],
+                    [{'type': 'xy', 'rowspan': 2, 'colspan': 2}, None, {'type': 'indicator'}],
                     [None, None, {'type': 'indicator'}],
-                    [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'bar'}],
-                    [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
-                    [{'type': 'table', 'colspan': 3}, None, None]   
+                    [{'type': 'xy'}, {'type': 'xy'}, {'type': 'xy'}],
+                    [{'type': 'xy'}, {'type': 'xy'}, {'type': 'xy'}],
+                    [{'type': 'xy'}, {'type': 'indicator'}, {'type': 'indicator'}],
+                    [{'type': 'table', 'colspan': 3}, None, None]
                 ],
                 subplot_titles=(
                     f'{self.symbol} - Prix et Indicateurs',
@@ -223,22 +255,80 @@ class TradingDashboard:
                     'Volume',
                     'Moyennes Mobiles',
                     'Volatilité (ATR)',
-                    'Prévisions IA'
+                    'Prévisions IA',
+                    'Drawdown Historique',
+                    'Sharpe Ratio',
+                    'VaR (95%)'
                 ),
                 vertical_spacing=0.08,
                 horizontal_spacing=0.1
             )
             
-            self._add_main_price_chart(fig, row=1, col=1)
-            self._add_trading_score_gauge(fig, row=1, col=3)
-            self._add_market_sentiment_indicator(fig, row=2, col=3)
-            self._add_rsi_chart(fig, row=3, col=1)
-            self._add_macd_chart(fig, row=3, col=2)
-            self._add_volume_chart(fig, row=3, col=3)
-            self._add_trend_chart(fig, row=4, col=1)
-            self._add_volatility_chart(fig, row=4, col=2)
-            self._add_predictions_chart(fig, row=4, col=3)
-            self._add_summary_table(fig, row=5, col=1)
+            # Ajout des graphiques avec gestion d'erreur locale
+            try:
+                self._add_main_price_chart(fig, row=1, col=1)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout graphique principal: {e}")
+            
+            try:
+                self._add_trading_score_gauge(fig, row=1, col=3)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout score gauge: {e}")
+            
+            try:
+                self._add_market_sentiment_indicator(fig, row=2, col=3)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout sentiment: {e}")
+            
+            try:
+                self._add_rsi_chart(fig, row=3, col=1)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout RSI: {e}")
+            
+            try:
+                self._add_macd_chart(fig, row=3, col=2)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout MACD: {e}")
+            
+            try:
+                self._add_volume_chart(fig, row=3, col=3)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout volume: {e}")
+            
+            try:
+                self._add_trend_chart(fig, row=4, col=1)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout tendance: {e}")
+            
+            try:
+                self._add_volatility_chart(fig, row=4, col=2)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout volatilité: {e}")
+            
+            try:
+                self._add_predictions_chart(fig, row=4, col=3)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout prédictions: {e}")
+            
+            try:
+                self._add_drawdown_chart(fig, row=5, col=1)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout drawdown: {e}")
+            
+            try:
+                self._add_sharpe_gauge(fig, row=5, col=2)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout sharpe: {e}")
+            
+            try:
+                self._add_var_gauge(fig, row=5, col=3)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout VaR: {e}")
+            
+            try:
+                self._add_summary_table(fig, row=6, col=1)
+            except Exception as e:
+                self.logger.error(f"Erreur ajout tableau récapitulatif: {e}")
             
             self._update_layout(fig)
             self._save_dashboard(fig, save_path)
@@ -251,8 +341,13 @@ class TradingDashboard:
     
     def _add_main_price_chart(self, fig, row: int, col: int):
         df = self.technical_data
+        if df is None or df.empty or 'Close' not in df.columns:
+            self.logger.warning("Pas de données de prix pour le graphique principal")
+            return
+        
+        # Utiliser Scattergl pour de meilleures performances
         fig.add_trace(
-            go.Scatter(
+            go.Scattergl(
                 x=df.index,
                 y=df['Close'],
                 mode='lines',
@@ -265,7 +360,7 @@ class TradingDashboard:
         
         if all(col in df.columns for col in ['BB_Upper', 'BB_Lower', 'BB_Middle']):
             fig.add_trace(
-                go.Scatter(
+                go.Scattergl(
                     x=df.index,
                     y=df['BB_Upper'],
                     mode='lines',
@@ -276,7 +371,7 @@ class TradingDashboard:
                 row=row, col=col
             )
             fig.add_trace(
-                go.Scatter(
+                go.Scattergl(
                     x=df.index,
                     y=df['BB_Lower'],
                     mode='lines',
@@ -299,6 +394,35 @@ class TradingDashboard:
             annotation_position="bottom right",
             row=row, col=col
         )
+        
+        # Annotation automatique pour signaux de croisement de bandes
+        if all(col in df.columns for col in ['BB_Upper', 'BB_Lower']):
+            if len(df) > 1:
+                last_close = df['Close'].iloc[-1]
+                last_upper = df['BB_Upper'].iloc[-1]
+                last_lower = df['BB_Lower'].iloc[-1]
+                if last_close > last_upper:
+                    fig.add_annotation(
+                        x=df.index[-1],
+                        y=last_close,
+                        text="Prix > bande supérieure (surachat potentiel)",
+                        showarrow=True,
+                        arrowhead=2,
+                        ax=0,
+                        ay=-40,
+                        row=row, col=col
+                    )
+                elif last_close < last_lower:
+                    fig.add_annotation(
+                        x=df.index[-1],
+                        y=last_close,
+                        text="Prix < bande inférieure (survente potentielle)",
+                        showarrow=True,
+                        arrowhead=2,
+                        ax=0,
+                        ay=40,
+                        row=row, col=col
+                    )
     
     def _add_trading_score_gauge(self, fig, row: int, col: int):
         fig.add_trace(
@@ -352,11 +476,13 @@ class TradingDashboard:
     
     def _add_rsi_chart(self, fig, row: int, col: int):
         if 'RSI' not in self.technical_data.columns:
+            self.logger.warning("Colonne RSI manquante")
             return
         df = self.technical_data
         x = df.index
+        
         fig.add_trace(
-            go.Scatter(
+            go.Scattergl(
                 x=x,
                 y=df['RSI'],
                 mode='lines',
@@ -368,12 +494,12 @@ class TradingDashboard:
         )
         # Lignes horizontales
         fig.add_trace(
-            go.Scatter(x=[x[0], x[-1]], y=[70, 70], mode='lines',
+            go.Scatter(x=[x[0], x[-1]], y=[RSI_OVERBOUGHT, RSI_OVERBOUGHT], mode='lines',
                        line=dict(color='red', dash='dash'), showlegend=False, hoverinfo='none'),
             row=row, col=col
         )
         fig.add_trace(
-            go.Scatter(x=[x[0], x[-1]], y=[30, 30], mode='lines',
+            go.Scatter(x=[x[0], x[-1]], y=[RSI_OVERSOLD, RSI_OVERSOLD], mode='lines',
                        line=dict(color='green', dash='dash'), showlegend=False, hoverinfo='none'),
             row=row, col=col
         )
@@ -382,71 +508,170 @@ class TradingDashboard:
                        line=dict(color='gray', dash='dot'), showlegend=False, hoverinfo='none'),
             row=row, col=col
         )
+        
+        # Annotation si RSI en zone extrême
+        last_rsi = df['RSI'].iloc[-1]
+        if last_rsi > RSI_OVERBOUGHT:
+            fig.add_annotation(
+                x=x[-1],
+                y=last_rsi,
+                text="RSI surachat",
+                showarrow=True,
+                arrowhead=2,
+                ax=0,
+                ay=-20,
+                row=row, col=col
+            )
+        elif last_rsi < RSI_OVERSOLD:
+            fig.add_annotation(
+                x=x[-1],
+                y=last_rsi,
+                text="RSI survente",
+                showarrow=True,
+                arrowhead=2,
+                ax=0,
+                ay=20,
+                row=row, col=col
+            )
     
     def _add_macd_chart(self, fig, row: int, col: int):
-        if all(col in self.technical_data.columns for col in ['MACD', 'MACD_Signal']):
-            df = self.technical_data
+        df = self.technical_data
+        if not all(col in df.columns for col in ['MACD', 'MACD_Signal']):
+            self.logger.warning("Colonnes MACD manquantes")
+            return
+        
+        fig.add_trace(
+            go.Scattergl(x=df.index, y=df['MACD'], mode='lines', name='MACD', line=dict(color='blue', width=2)),
+            row=row, col=col
+        )
+        fig.add_trace(
+            go.Scattergl(x=df.index, y=df['MACD_Signal'], mode='lines', name='Signal', line=dict(color='red', width=1.5)),
+            row=row, col=col
+        )
+        if 'MACD_Histogram' in df.columns:
+            colors = ['green' if x >= 0 else 'red' for x in df['MACD_Histogram']]
             fig.add_trace(
-                go.Scatter(x=df.index, y=df['MACD'], mode='lines', name='MACD', line=dict(color='blue', width=2)),
+                go.Bar(x=df.index, y=df['MACD_Histogram'], name='Histogramme MACD',
+                       marker_color=colors, opacity=0.6),
                 row=row, col=col
             )
-            fig.add_trace(
-                go.Scatter(x=df.index, y=df['MACD_Signal'], mode='lines', name='Signal', line=dict(color='red', width=1.5)),
-                row=row, col=col
-            )
-            if 'MACD_Histogram' in df.columns:
-                colors = ['green' if x >= 0 else 'red' for x in df['MACD_Histogram']]
-                fig.add_trace(
-                    go.Bar(x=df.index, y=df['MACD_Histogram'], name='Histogramme MACD',
-                           marker_color=colors, opacity=0.6),
+        
+        # Annotation pour croisement MACD
+        if len(df) > 1:
+            last_macd = df['MACD'].iloc[-1]
+            last_signal = df['MACD_Signal'].iloc[-1]
+            prev_macd = df['MACD'].iloc[-2]
+            prev_signal = df['MACD_Signal'].iloc[-2]
+            if prev_macd < prev_signal and last_macd > last_signal:
+                fig.add_annotation(
+                    x=df.index[-1],
+                    y=last_macd,
+                    text="Croisement haussier MACD",
+                    showarrow=True,
+                    arrowhead=2,
+                    ax=0,
+                    ay=-20,
+                    row=row, col=col
+                )
+            elif prev_macd > prev_signal and last_macd < last_signal:
+                fig.add_annotation(
+                    x=df.index[-1],
+                    y=last_macd,
+                    text="Croisement baissier MACD",
+                    showarrow=True,
+                    arrowhead=2,
+                    ax=0,
+                    ay=20,
                     row=row, col=col
                 )
     
     def _add_volume_chart(self, fig, row: int, col: int):
-        if 'Volume' in self.technical_data.columns:
-            df = self.technical_data
-            colors = []
-            for i in range(len(df)):
-                if i == 0:
-                    colors.append('gray')
-                else:
-                    colors.append('green' if df['Close'].iloc[i] >= df['Close'].iloc[i-1] else 'red')
+        if 'Volume' not in self.technical_data.columns:
+            self.logger.warning("Colonne Volume manquante")
+            return
+        
+        df = self.technical_data
+        colors = []
+        for i in range(len(df)):
+            if i == 0:
+                colors.append('gray')
+            else:
+                colors.append('green' if df['Close'].iloc[i] >= df['Close'].iloc[i-1] else 'red')
+        fig.add_trace(
+            go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=colors, opacity=0.7,
+                   hovertemplate='%{x|%d %b %Y}<br>Volume: %{y:,.0f}<extra></extra>'),
+            row=row, col=col
+        )
+        if 'Volume_SMA' in df.columns:
             fig.add_trace(
-                go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=colors, opacity=0.7,
-                       hovertemplate='%{x|%d %b %Y}<br>Volume: %{y:,.0f}<extra></extra>'),
+                go.Scattergl(x=df.index, y=df['Volume_SMA'], mode='lines', name='Volume Moyen (20j)',
+                           line=dict(color='orange', width=1.5)),
                 row=row, col=col
             )
-            if 'Volume_SMA' in df.columns:
-                fig.add_trace(
-                    go.Scatter(x=df.index, y=df['Volume_SMA'], mode='lines', name='Volume Moyen (20j)',
-                               line=dict(color='orange', width=1.5)),
-                    row=row, col=col
-                )
     
     def _add_trend_chart(self, fig, row: int, col: int):
         df = self.technical_data
+        if df is None or df.empty or 'Close' not in df.columns:
+            return
+        
         fig.add_trace(
-            go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Prix', line=dict(color='black', width=1), opacity=0.5),
+            go.Scattergl(x=df.index, y=df['Close'], mode='lines', name='Prix', line=dict(color='black', width=1), opacity=0.5),
             row=row, col=col
         )
-        for ma_period, color in [(20, 'blue'), (50, 'red'), (200, 'green')]:
+        for ma_period in SMA_PERIODS:
             col_name = f'SMA_{ma_period}'
             if col_name in df.columns:
                 fig.add_trace(
-                    go.Scatter(x=df.index, y=df[col_name], mode='lines', name=f'SMA {ma_period}',
-                               line=dict(color=color, width=1.5)),
+                    go.Scattergl(x=df.index, y=df[col_name], mode='lines', name=f'SMA {ma_period}',
+                               line=dict(color=px.colors.qualitative.Set1[SMA_PERIODS.index(ma_period) % len(px.colors.qualitative.Set1)], width=1.5)),
+                    row=row, col=col
+                )
+        
+        # Annotation pour croisement SMA
+        if 'SMA_50' in df.columns and 'SMA_200' in df.columns and len(df) > 1:
+            last_50 = df['SMA_50'].iloc[-1]
+            last_200 = df['SMA_200'].iloc[-1]
+            prev_50 = df['SMA_50'].iloc[-2]
+            prev_200 = df['SMA_200'].iloc[-2]
+            if prev_50 < prev_200 and last_50 > last_200:
+                fig.add_annotation(
+                    x=df.index[-1],
+                    y=last_50,
+                    text="Croisement doré (50>200)",
+                    showarrow=True,
+                    arrowhead=2,
+                    ax=0,
+                    ay=-20,
+                    row=row, col=col
+                )
+            elif prev_50 > prev_200 and last_50 < last_200:
+                fig.add_annotation(
+                    x=df.index[-1],
+                    y=last_50,
+                    text="Croisement mortel (50<200)",
+                    showarrow=True,
+                    arrowhead=2,
+                    ax=0,
+                    ay=20,
                     row=row, col=col
                 )
     
     def _add_volatility_chart(self, fig, row: int, col: int):
-        if 'ATR' in self.technical_data.columns:
-            df = self.technical_data
-            fig.add_trace(
-                go.Scatter(x=df.index, y=df['ATR'], mode='lines', name='ATR',
-                           line=dict(color='orange', width=2),
-                           hovertemplate='%{x|%d %b %Y}<br>ATR: %{y:.2f}<extra></extra>'),
-                row=row, col=col
-            )
+        if 'ATR' not in self.technical_data.columns:
+            self.logger.warning("Colonne ATR manquante")
+            return
+        df = self.technical_data
+        fig.add_trace(
+            go.Scattergl(
+                x=df.index,
+                y=df['ATR'],
+                mode='lines',
+                name='ATR',
+                line=dict(color='orange', width=2),
+                hovertemplate='%{x|%d %b %Y}<br>ATR: %{y:.2f}<extra></extra>'
+            ),
+            row=row, col=col
+        )
     
     def _add_predictions_chart(self, fig, row: int, col: int):
         if self.predictions_df is None or self.predictions_df.empty:
@@ -458,7 +683,7 @@ class TradingDashboard:
         future_prices = self.predictions_df['Predicted_Close'].values
         
         fig.add_trace(
-            go.Scatter(
+            go.Scattergl(
                 x=future_dates,
                 y=future_prices,
                 mode='lines+markers',
@@ -469,6 +694,33 @@ class TradingDashboard:
             ),
             row=row, col=col
         )
+        
+        # Ajout des intervalles de confiance si disponibles
+        if 'CI_Lower' in self.predictions_df.columns and 'CI_Upper' in self.predictions_df.columns:
+            fig.add_trace(
+                go.Scattergl(
+                    x=future_dates,
+                    y=self.predictions_df['CI_Upper'],
+                    mode='lines',
+                    name='CI Supérieur',
+                    line=dict(color='rgba(255, 0, 0, 0.3)', width=1),
+                    showlegend=True
+                ),
+                row=row, col=col
+            )
+            fig.add_trace(
+                go.Scattergl(
+                    x=future_dates,
+                    y=self.predictions_df['CI_Lower'],
+                    mode='lines',
+                    name='CI Inférieur',
+                    line=dict(color='rgba(0, 255, 0, 0.3)', width=1),
+                    fill='tonexty',
+                    fillcolor='rgba(0, 255, 0, 0.1)',
+                    showlegend=True
+                ),
+                row=row, col=col
+            )
         
         if len(future_dates) > 0:
             fig.add_shape(
@@ -489,7 +741,126 @@ class TradingDashboard:
                 font=dict(size=10),
                 row=row, col=col
             )
+    
+    def _add_drawdown_chart(self, fig, row: int, col: int):
+        """Ajoute un graphique de drawdown historique"""
+        if self.technical_data is None or 'Close' not in self.technical_data.columns:
+            return
+        df = self.technical_data
+        rolling_max = df['Close'].cummax()
+        drawdown = (df['Close'] - rolling_max) / rolling_max * 100
+        fig.add_trace(
+            go.Scattergl(
+                x=df.index,
+                y=drawdown,
+                mode='lines',
+                name='Drawdown (%)',
+                line=dict(color='red', width=2),
+                hovertemplate='%{x|%d %b %Y}<br>Drawdown: %{y:.1f}%<extra></extra>'
+            ),
+            row=row, col=col
+        )
+        # Ligne de référence à zéro
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=[0] * len(df),
+                mode='lines',
+                line=dict(dash='dash', color='black', width=1),
+                name='Zero Line',
+                showlegend=False,
+                hoverinfo='skip'
+            ),
+            row=row, col=col
+        )
+        if 'max_drawdown' in self.risk_metrics:
+            max_dd = self.risk_metrics['max_drawdown'] * 100
+            # Ligne horizontale pour le max drawdown
+            fig.add_trace(
+                go.Scatter(
+                    x=df.index,
+                    y=[max_dd] * len(df),
+                    mode='lines',
+                    line=dict(dash='dash', color='darkred', width=1),
+                    name=f'Max DD: {max_dd:.1f}%',
+                    showlegend=True,
+                    hoverinfo='y',
+                    hovertemplate=f'Max Drawdown: {max_dd:.1f}%<extra></extra>'
+                ),
+                row=row, col=col
+            )
+            # Annotation pour indiquer la valeur
+            fig.add_annotation(
+                x=df.index[-1],
+                y=max_dd,
+                text=f"Max: {max_dd:.1f}%",
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=2,
+                arrowcolor='darkred',
+                ax=0,
+                ay=-30,
+                row=row, col=col
+            )
 
+    def _add_sharpe_gauge(self, fig, row: int, col: int):
+        """Ajoute un gauge pour le Sharpe Ratio"""
+        if 'sharpe_ratio' not in self.risk_metrics:
+            return
+        sr = self.risk_metrics['sharpe_ratio']
+        fig.add_trace(
+            go.Indicator(
+                mode="gauge+number",
+                value=sr,
+                title={'text': "Sharpe Ratio", 'font': {'size': 14}},
+                gauge={
+                    'axis': {'range': [-2, 3]},
+                    'bar': {'color': "darkblue"},
+                    'steps': [
+                        {'range': [-2, 0], 'color': "red"},
+                        {'range': [0, 1], 'color': "yellow"},
+                        {'range': [1, 2], 'color': "lightgreen"},
+                        {'range': [2, 3], 'color': "green"}
+                    ],
+                    'threshold': {
+                        'line': {'color': "black", 'width': 4},
+                        'thickness': 0.75,
+                        'value': sr
+                    }
+                }
+            ),
+            row=row, col=col
+        )
+
+    def _add_var_gauge(self, fig, row: int, col: int):
+        """Ajoute un gauge pour la Value at Risk"""
+        if 'value_at_risk' not in self.risk_metrics:
+            return
+        var = abs(self.risk_metrics['value_at_risk'] * 100)  # Convertir en % positif pour affichage
+        fig.add_trace(
+            go.Indicator(
+                mode="gauge+number",
+                value=var,
+                title={'text': "VaR (95%) %", 'font': {'size': 14}},
+                gauge={
+                    'axis': {'range': [0, 20]},
+                    'bar': {'color': "darkred"},
+                    'steps': [
+                        {'range': [0, 5], 'color': "green"},
+                        {'range': [5, 10], 'color': "yellow"},
+                        {'range': [10, 15], 'color': "orange"},
+                        {'range': [15, 20], 'color': "red"}
+                    ],
+                    'threshold': {
+                        'line': {'color': "black", 'width': 4},
+                        'thickness': 0.75,
+                        'value': var
+                    }
+                }
+            ),
+            row=row, col=col
+        )    
     def _update_layout(self, fig):
         try:
             fig.update_layout(
@@ -499,7 +870,7 @@ class TradingDashboard:
                     x=0.5,
                     y=0.98
                 ),
-                height=1400,
+                height=1600,
                 showlegend=True,
                 template='plotly_white',
                 hovermode='x unified',
@@ -514,29 +885,22 @@ class TradingDashboard:
                 plot_bgcolor='rgba(240, 240, 240, 0.5)'
             )
             
-            subplots_with_axes = [
-                (1, 1, True),
-                (3, 1, True),
-                (3, 2, True),
-                (3, 3, True),
-                (4, 1, True),
-                (4, 2, True),
-                (4, 3, True),
-            ]
+            # Définition des titres d'axes spécifiques
+            axis_titles = {
+                (1, 1): {"x": "Date", "y": "Prix ($)"},
+                (3, 1): {"x": "Date", "y": "RSI"},
+                (3, 2): {"x": "Date", "y": "MACD"},
+                (3, 3): {"x": "Date", "y": "Volume"},
+                (4, 1): {"x": "Date", "y": "Prix ($)"},
+                (4, 2): {"x": "Date", "y": "ATR ($)"},
+                (4, 3): {"x": "Date", "y": "Prix ($)"},
+                (5, 1): {"x": "Date", "y": "Drawdown (%)"},
+            }
             
-            for row, col, has_title in subplots_with_axes:
-                fig.update_xaxes(
-                    title_text="Date" if has_title else None,
-                    tickangle=45,
-                    gridcolor='lightgray',
-                    showgrid=True,
-                    row=row, col=col
-                )
-                fig.update_yaxes(
-                    gridcolor='lightgray',
-                    showgrid=True,
-                    row=row, col=col
-                )
+            for (r, c), titles in axis_titles.items():
+                fig.update_xaxes(title_text=titles["x"], tickangle=45, gridcolor='lightgray', showgrid=True, row=r, col=c)
+                fig.update_yaxes(title_text=titles["y"], gridcolor='lightgray', showgrid=True, row=r, col=c)
+                
         except Exception as e:
             self.logger.error(f"Erreur mise à jour du layout: {e}")
     
@@ -546,7 +910,8 @@ class TradingDashboard:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             
             html_file = f"{save_path}/{self.symbol}_dashboard_{timestamp}.html"
-            fig.write_html(html_file)
+            # Rendre le dashboard responsive
+            fig.write_html(html_file, config={'responsive': True})
             
             png_file = f"{save_path}/{self.symbol}_dashboard_{timestamp}.png"
             fig.write_image(png_file, width=1600, height=900, scale=2)
@@ -603,7 +968,7 @@ class TradingDashboard:
         summary = []
         if 'RSI' in last_row and not pd.isna(last_row['RSI']):
             rsi = last_row['RSI']
-            rsi_status = "SURACHAT ⚠️" if rsi > 70 else "SURVENTE ✅" if rsi < 30 else "NEUTRE ⚖️"
+            rsi_status = "SURACHAT ⚠️" if rsi > RSI_OVERBOUGHT else "SURVENTE ✅" if rsi < RSI_OVERSOLD else "NEUTRE ⚖️"
             summary.append(('RSI (14j)', f"{rsi:.1f}", rsi_status))
         if 'MACD' in last_row and 'MACD_Signal' in last_row:
             macd = last_row['MACD']
@@ -620,10 +985,11 @@ class TradingDashboard:
         if 'ATR' in last_row and not pd.isna(last_row['ATR']):
             atr = last_row['ATR']
             atr_pct = (atr / self.current_price) * 100 if self.current_price > 0 else 0
-            vol_status = "ÉLEVÉ ⚠️" if atr_pct > 3 else "MODÉRÉ ⚖️" if atr_pct > 1.5 else "FAIBLE ✅"
+            vol_status = ("ÉLEVÉ ⚠️" if atr_pct > ATR_HIGH_THRESHOLD 
+                         else "MODÉRÉ ⚖️" if atr_pct > ATR_MODERATE_THRESHOLD 
+                         else "FAIBLE ✅")
             summary.append(('Volatilité (ATR)', f"{atr_pct:.1f}%", vol_status))
         return pd.DataFrame(summary, columns=['Indicateur', 'Valeur', 'Statut'])
-
 
 class MiniDashboard:
     """Dashboard minimal pour affichage rapide"""
@@ -635,15 +1001,16 @@ class MiniDashboard:
     def create_compact_view(self, data: pd.DataFrame, predictions_df: pd.DataFrame) -> go.Figure:
         """Crée une vue compacte du dashboard"""
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=data.index,
-            y=data['Close'],
-            mode='lines',
-            name='Prix historique',
-            line=dict(color='blue', width=2)
-        ))
+        if data is not None and not data.empty and 'Close' in data.columns:
+            fig.add_trace(go.Scattergl(
+                x=data.index,
+                y=data['Close'],
+                mode='lines',
+                name='Prix historique',
+                line=dict(color='blue', width=2)
+            ))
         if predictions_df is not None and not predictions_df.empty and 'Predicted_Close' in predictions_df.columns:
-            fig.add_trace(go.Scatter(
+            fig.add_trace(go.Scattergl(
                 x=predictions_df.index,
                 y=predictions_df['Predicted_Close'],
                 mode='lines+markers',
@@ -661,12 +1028,11 @@ class MiniDashboard:
         )
         return fig
 
-
 def create_comparison_dashboard(symbols: List[str], data_dict: Dict[str, pd.DataFrame]) -> go.Figure:
     """Crée un dashboard de comparaison entre plusieurs actions"""
     fig = make_subplots(
         rows=2, cols=2,
-        subplot_titles=('Performance Relative', 'Volatilité Comparée', 
+        subplot_titles=('Performance Relative', 'Volatilité Comparée',
                        'RSI Comparé', 'Volume Comparé'),
         vertical_spacing=0.1,
         horizontal_spacing=0.1
@@ -682,19 +1048,19 @@ def create_comparison_dashboard(symbols: List[str], data_dict: Dict[str, pd.Data
             if 'Close' in data.columns and len(data) > 0:
                 normalized = (data['Close'] / data['Close'].iloc[0] * 100)
                 fig.add_trace(
-                    go.Scatter(x=data.index, y=normalized, name=symbol, line=dict(color=color)),
+                    go.Scattergl(x=data.index, y=normalized, name=symbol, line=dict(color=color)),
                     row=1, col=1
                 )
             
             if 'ATR' in data.columns:
                 fig.add_trace(
-                    go.Scatter(x=data.index, y=data['ATR'], name=symbol, line=dict(color=color), showlegend=False),
+                    go.Scattergl(x=data.index, y=data['ATR'], name=symbol, line=dict(color=color), showlegend=False),
                     row=1, col=2
                 )
             
             if 'RSI' in data.columns:
                 fig.add_trace(
-                    go.Scatter(x=data.index, y=data['RSI'], name=symbol, line=dict(color=color), showlegend=False),
+                    go.Scattergl(x=data.index, y=data['RSI'], name=symbol, line=dict(color=color), showlegend=False),
                     row=2, col=1
                 )
             
@@ -708,7 +1074,7 @@ def create_comparison_dashboard(symbols: List[str], data_dict: Dict[str, pd.Data
     
     fig.update_layout(
         title='Comparaison Multi-Actions',
-        height=800,
+        height=1000,
         showlegend=True,
         template='plotly_white',
         hovermode='x unified'

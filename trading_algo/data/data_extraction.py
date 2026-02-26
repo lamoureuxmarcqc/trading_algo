@@ -620,7 +620,95 @@ class StockDataExtractor:
             'source': 'New York Times API (simulé)',
             'last_updated': datetime.now().isoformat()
         }
-    def calculate_technical_indicators(self, data: pd.DataFrame = None) -> pd.DataFrame:
+    def add_external_features(self, df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
+        """
+        Ajoute des features externes au DataFrame des indicateurs techniques en conservant toutes les colonnes existantes.
+        """
+        if symbol is None:
+            symbol = self.symbol
+        if symbol is None:
+            logger.warning("Aucun symbole fourni pour les features externes")
+            return df
+    
+        # Important : copier le DataFrame pour ne pas modifier l'original
+        df_ext = df.copy()
+        logger.info(f"Avant ajout external features : {df_ext.shape[1]} colonnes")
+    
+        # 1. Données fondamentales (via fallback Yahoo Finance)
+        try:
+            fund_data = self.get_fundamental_data_fallback(symbol)
+            if fund_data:
+                profile = fund_data.get('profile', {})
+                ratios = fund_data.get('ratios', {})
+                for key, value in profile.items():
+                    if isinstance(value, (int, float)):
+                        df_ext[f'fund_{key}'] = value
+                for key, value in ratios.items():
+                    if isinstance(value, (int, float)):
+                        df_ext[f'fund_{key}'] = value
+                logger.info(f"Ajout de {len(profile)+len(ratios)} features fondamentales")
+        except Exception as e:
+            logger.warning(f"Erreur ajout features fondamentales: {e}")
+    
+        # 2. Sentiment Twitter
+        try:
+            sentiment = self.get_sentiment_from_x(symbol)
+            if sentiment:
+                avg_sent = sentiment.get('avg_sentiment', 0)
+                tweet_count = sentiment.get('tweet_count', 0)
+                total_likes = sentiment.get('total_likes', 0)
+                df_ext['sentiment_score'] = avg_sent
+                df_ext['sentiment_tweet_count'] = tweet_count
+                df_ext['sentiment_total_likes'] = total_likes
+                logger.info("Ajout de 3 features de sentiment Twitter")
+        except Exception as e:
+            logger.warning(f"Erreur ajout features sentiment: {e}")
+    
+        # 3. Actualités NYT
+        try:
+            news = self.get_news_from_nyt(symbol, days=30)
+            if news and 'articles' in news:
+                articles_df = pd.DataFrame(news['articles'])
+                if not articles_df.empty:
+                    articles_df['date'] = pd.to_datetime(articles_df['date'])
+                    articles_df = articles_df.set_index('date')
+                    daily_articles = articles_df.resample('D').size()
+                    daily_articles = daily_articles.reindex(df_ext.index, method='ffill').fillna(0)
+                    df_ext['news_count'] = daily_articles
+                    sentiment_map = {'POSITIVE': 1, 'NEUTRAL': 0, 'NEGATIVE': -1}
+                    articles_df['sentiment_value'] = articles_df['sentiment'].map(sentiment_map).fillna(0)
+                    daily_sentiment = articles_df['sentiment_value'].resample('D').mean()
+                    daily_sentiment = daily_sentiment.reindex(df_ext.index, method='ffill').fillna(0)
+                    df_ext['news_sentiment'] = daily_sentiment
+                    logger.info("Ajout de 2 features d'actualités NYT")
+        except Exception as e:
+            logger.warning(f"Erreur ajout features news: {e}")
+    
+        # 4. Indicateurs macroéconomiques
+        try:
+            macro = MacroDataExtractor()
+            econ = macro.get_economic_indicators('US')
+            for name, data in econ.items():
+                if isinstance(data, dict) and 'value' in data:
+                    df_ext[f'macro_{name}'] = data['value']
+            logger.info(f"Ajout de {len(econ)} features macroéconomiques")
+        except Exception as e:
+            logger.warning(f"Erreur ajout features macro: {e}")
+    
+        # 5. Taux de change
+        try:
+            macro = MacroDataExtractor()
+            currencies = macro.get_currency_rates()
+            for pair, data in currencies.items():
+                if isinstance(data, dict) and 'rate' in data:
+                    df_ext[f'forex_{pair.replace("/", "_")}'] = data['rate']
+            logger.info(f"Ajout de {len(currencies)} features de change")
+        except Exception as e:
+            logger.warning(f"Erreur ajout features change: {e}")
+    
+        logger.info(f"Après ajout external features : {df_ext.shape[1]} colonnes (soit {df_ext.shape[1] - df.shape[1]} nouvelles)")
+        return df_ext
+    def calculate_technical_indicators(self, data: pd.DataFrame = None, include_external: bool = True) -> pd.DataFrame:
         """
         Calcule les indicateurs techniques sur les données OHLCV de manière optimisée
         Args:
@@ -680,20 +768,6 @@ class StockDataExtractor:
             indicators['BB_Width'] = (indicators['BB_Upper'] - indicators['BB_Lower']) / bb_middle.replace(0, np.finfo(float).eps)
         
             # 5. ATR optimisé (avec alignement d'index)
-            '''
-            tr1 = high - low
-            tr2 = np.abs(high - close.shift())
-            tr3 = np.abs(low - close.shift())
-
-            # On calcule le True Range (numpy gère bien les NaNs de shift())
-            true_range_raw = np.maximum.reduce([tr1, tr2, tr3])
-
-            # Crucial : On réinjecte l'index de 'high' (ou 'close') pour l'alignement temporel
-            true_range = pd.Series(true_range_raw, index=high.index) 
-
-            # Le calcul du rolling fonctionnera maintenant parfaitement
-            indicators['ATR'] = true_range.rolling(window=14, min_periods=1).mean()
-            '''
             # 5. ATR optimisé (sans concat)
             tr1 = high - low
             tr2 = np.abs(high - close.shift())
@@ -805,7 +879,12 @@ class StockDataExtractor:
             for name, values in indicators.items():
                 df[name] = values
         
-            # 17. Nettoyage intelligent des données
+            # 17. ajout des indicateurs externe
+            logger.info(f"Nombre de colonnes techniques avant ajout externe : {df.shape[1]}")
+            if include_external and self.symbol:
+                df = self.add_external_features(df, self.symbol)
+    
+            # 18. Nettoyage intelligent des données
             # Supprimer les colonnes avec trop de NaN
             nan_threshold = 0.5  # 50% maximum de NaN
             cols_to_drop = []
@@ -829,7 +908,7 @@ class StockDataExtractor:
                 if df[col].isna().any():
                     df[col] = df[col].fillna(df[col].mean())
         
-            # 18. Supprimer les premières lignes avec trop de NaN pour les indicateurs à long terme
+            # 19. Supprimer les premières lignes avec trop de NaN pour les indicateurs à long terme
             # Garder au moins 200 périodes si disponible
             keep_from = max(200, int(len(df) * 0.05))  # Au moins 200 lignes ou 5% des données
             initial_length = len(df)
@@ -837,10 +916,7 @@ class StockDataExtractor:
             if len(df) > keep_from:
                 df = df.iloc[keep_from:]
         
-            # 19. Normalisation optionnelle (commentée par défaut)
-            # if self.normalize_features:
-            #     df = self._normalize_features(df)
-        
+     
             # Convertir les types de données pour économiser de la mémoire
             for col in df.select_dtypes(include=['float64']).columns:
                 df[col] = df[col].astype('float32')
@@ -858,7 +934,8 @@ class StockDataExtractor:
         except Exception as e:
             logger.error(f"Erreur calculate_technical_indicators: {e}", exc_info=True)
             # Retourner les données originales si possible
-            return data.copy() if data is not None else pd.DataFrame()    
+            return data.copy() if data is not None else pd.DataFrame()  
+        
     def create_target_columns(self, 
                              data: pd.DataFrame = None, 
                              forecast_days: List[int] = None) -> pd.DataFrame:

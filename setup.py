@@ -18,6 +18,7 @@ setup(
         "matplotlib>=3.10.0",
         "lxml>=6.0.2",
         "kaleido>=1.2.0",
+        "openpyxl>=3.1.3",
     ],
     python_requires=">=3.8",
     entry_points={
