@@ -5,14 +5,22 @@ Fichier de démarrage simplifié
 
 import subprocess
 import sys
+import os
+
+# Initialize centralized logging for this CLI script
+from trading_algo.logging_config import init_logging
+
+init_logging(level=os.getenv("LOG_LEVEL", None), logfile=os.getenv("LOG_FILE", None))
+import logging
+logger = logging.getLogger(__name__)
 
 def main():
-    print("🚀 Démarrage du système de trading...")
-    print("Choisissez une option:")
-    print("1. Screening du S&P 500")
-    print("2. Analyser une action")
-    print("3. Comparer plusieurs actions")
-    print("4. Quitter")
+    logger.info("🚀 Démarrage du système de trading...")
+    logger.info("Choisissez une option:")
+    logger.info("1. Screening du S&P 500")
+    logger.info("2. Analyser une action")
+    logger.info("3. Comparer plusieurs actions")
+    logger.info("4. Quitter")
     
     choice = input("\nVotre choix (1-4): ").strip()
     
@@ -34,7 +42,7 @@ def main():
         symbols = input("Symboles à comparer (séparés par des virgules): ").strip()
         subprocess.run([sys.executable, "run.py", symbols, "--mode", "compare"])
     else:
-        print("Au revoir!")
+        logger.info("Au revoir!")
 
 if __name__ == "__main__":
     main()

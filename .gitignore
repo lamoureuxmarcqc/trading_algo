@@ -69,6 +69,8 @@ coverage.xml
 *.cover
 *.py,cover
 *.xlsx
+*.csv
+scripts/*.sh
 .hypothesis/
 .pytest_cache/
 cover/
@@ -79,6 +81,7 @@ models/
 models_saved/
 dashboards/
 cache/
+portfolios/
 
 
 # Translations

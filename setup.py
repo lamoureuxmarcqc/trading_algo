@@ -19,6 +19,9 @@ setup(
         "lxml>=6.0.2",
         "kaleido>=1.2.0",
         "openpyxl>=3.1.3",
+        "dash>=2.14.0,<3.0.0",          # Version stable 2.x
+        "dash-bootstrap-components>=1.0.0,<2.0.0",
+        "dash-cytoscape>=1.0.0,<2.0.0"   # Si vous l'utilisez
     ],
     python_requires=">=3.8",
     entry_points={

@@ -1,12 +1,5 @@
-"""
-Package de modèles pour le trading algorithmique
-"""
+# trading_algo/portfolio/__init__.py
+from .portfolio import Portfolio, Position, Order
+from .portfoliomanager import PortfolioManager
 
-from .position import Position, Order
-from .portfolio import Portfolio
-
-__all__ = [
-    'Portfolio',
-    'Position',
-    'Order'
-]
+__all__ = ['Portfolio', 'Position', 'Order', 'PortfolioManager']

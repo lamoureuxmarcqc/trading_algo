@@ -22,7 +22,8 @@ from sklearn.preprocessing import StandardScaler
 # Modules internes
 from trading_algo.data.data_extraction import StockDataExtractor, get_stock_overview, MacroDataExtractor
 from trading_algo.models.base_model import ImprovedLSTMPredictorMultiOutput
-logging.basicConfig(level=logging.INFO)
+
+# Do not configure logging at module import time.
 logger = logging.getLogger(__name__)
 tf.get_logger().setLevel('ERROR')
 
@@ -780,38 +781,39 @@ class StockModelTrain:
             if not self.analysis_results:
                 self.analyze_model_stock()
             
-            print(f"\n📊 DASHBOARD POUR {self.symbol}")
-            print("=" * 60)
-            print(f"Prix actuel: ${self.current_price:.2f}")
-            print(f"Score de trading: {self.trading_score}/10")
-            print(f"Recommandation: {self.recommendation}")
-            print("\nPrédictions:")
+            logger.info(f"\n📊 DASHBOARD POUR {self.symbol}")
+            logger.info("=" * 60)
+            logger.info(f"Prix actuel: ${self.current_price:.2f}")
+            logger.info(f"Score de trading: {self.trading_score}/10")
+            logger.info(f"Recommandation: {self.recommendation}")
+            logger.info("\nPrédictions:")
             
             predictions = self.analysis_results.get('predictions', {})
             for horizon, pred in predictions.items():
                 if pred is not None:
                     change_pct = ((pred - self.current_price) / self.current_price * 100)
-                    print(f" {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
+                    logger.info(f" {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
             
-            print("\nNote: Le dashboard interactif sera disponible avec le module dashboard.py")
+            logger.info("\nNote: Le dashboard interactif sera disponible avec le module dashboard.py")
             
         except Exception as e:
-            logger.error(f"Erreur stockmodeltrain.create_dashboard: {e}")
+            logger.error(f"Erreur stockmodeltrain.create_dashboard: {e}", exc_info=True)
+
 
 def main():
     """Fonction principale d'exécution dans stockmodeltrain"""
-    print("🚀 PRÉDICTEUR D'ACTIONS AVEC IA")
-    print("="*60)
+    logger.info("🚀 PRÉDICTEUR D'ACTIONS AVEC IA")
+    logger.info("=" * 60)
     
     popular_stocks = {
         '1': 'AAPL', '2': 'TSLA', '3': 'MSFT', '4': 'GOOGL',
         '5': 'AMZN', '6': 'META', '7': 'NVDA', '8': 'BTC-USD', '9': 'SPY',
     }
     
-    print("\n📈 ACTIONS POPULAIRES:")
+    logger.info("\n📈 ACTIONS POPULAIRES:")
     for key, value in popular_stocks.items():
-        print(f" {key}. {value}")
-    print(" 0. Entrer un symbole personnalisé")
+        logger.info(f" {key}. {value}")
+    logger.info(" 0. Entrer un symbole personnalisé")
     
     choice = input("\nChoisissez une action (1-9) ou 0 pour personnalisé: ").strip()
     
@@ -820,28 +822,28 @@ def main():
     elif choice in popular_stocks:
         symbol = popular_stocks[choice]
     else:
-        print("Choix invalide, utilisation de AAPL par défaut")
+        logger.warning("Choix invalide, utilisation de AAPL par défaut")
         symbol = 'AAPL'
     
-    print("\n⏰ PÉRIODE D'ANALYSE:")
-    print(" 1. 1 an")
-    print(" 2. 3 ans")
-    print(" 3. 5 ans (recommandé)")
-    print(" 4. 10 ans")
+    logger.info("\n⏰ PÉRIODE D'ANALYSE:")
+    logger.info(" 1. 1 an")
+    logger.info(" 2. 3 ans")
+    logger.info(" 3. 5 ans (recommandé)")
+    logger.info(" 4. 10 ans")
     
     period_choice = input("Choisissez la période (1-4): ").strip()
     periods = {'1': '1y', '2': '3y', '3': '5y', '4': '10y'}
     period = periods.get(period_choice, '5y')
     
-    print("\n⚙️ OPTIONS D'ANALYSE:")
-    print(" 1. Analyse complète avec dashboard")
-    print(" 2. Analyse rapide (sans dashboard)")
+    logger.info("\n⚙️ OPTIONS D'ANALYSE:")
+    logger.info(" 1. Analyse complète avec dashboard")
+    logger.info(" 2. Analyse rapide (sans dashboard)")
     
     option_choice = input("Choisissez l'option (1-2): ").strip()
     
-    print(f"\n{'='*60}")
-    print(f"Lancement de l'analyse pour {symbol} ({period})...")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Lancement de l'analyse pour {symbol} ({period})...")
+    logger.info(f"{'='*60}")
     
     start_time = datetime.now()
     
@@ -850,32 +852,40 @@ def main():
         results = predictor.analyze_model_stock()
         
         if 'error' not in results:
-            print(f"\n📊 RÉSULTATS POUR {symbol}:")
-            print(f" Prix actuel: ${results['current_price']:.2f}")
-            print(f" Score de trading: {results['trading_score']:.1f}/10")
-            print(f" Recommandation: {results['recommendation']}")
+            logger.info(f"\n📊 RÉSULTATS POUR {symbol}:")
+            logger.info(f" Prix actuel: ${results['current_price']:.2f}")
+            logger.info(f" Score de trading: {results['trading_score']:.1f}/10")
+            logger.info(f" Recommandation: {results['recommendation']}")
             
             predictions = results['predictions']
-            print(f"\n Prédictions de prix:")
+            logger.info(f"\n Prédictions de prix:")
             for horizon, pred in predictions.items():
                 if pred is not None:
                     change_pct = ((pred - results['current_price']) / results['current_price'] * 100)
-                    print(f" {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
+                    logger.info(f" {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
             
             if option_choice == '1':
-                print("\n📈 Création du dashboard...")
+                logger.info("\n📈 Création du dashboard...")
                 predictor.create_dashboard()
         else:
-            print(f"❌ Erreur: {results['error']}")
+            logger.error(f"❌ Erreur: {results['error']}")
     
     except Exception as e:
-        print(f"❌ Erreur lors de l'analyse: {e}")
+        logger.error(f"❌ Erreur lors de l'analyse: {e}", exc_info=True)
     
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
     
-    print(f"\n⏱️ Analyse terminée en {duration:.1f} secondes")
-    print("="*60)
+    logger.info(f"\n⏱️ Analyse terminée en {duration:.1f} secondes")
+    logger.info("=" * 60)
 
+# When executed as a script, initialize logging centrally first.
 if __name__ == "__main__":
+    try:
+        from trading_algo.logging_config import init_logging
+        init_logging(level=os.getenv("LOG_LEVEL", None), logfile=os.getenv("LOG_FILE", None))
+    except Exception:
+        # fallback to basicConfig only for direct script execution environment
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    # Execute main CLI behavior
     main()

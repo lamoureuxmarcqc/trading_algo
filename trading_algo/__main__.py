@@ -5,9 +5,18 @@ Point d'entrée principal du système d'analyse boursière
 import sys
 import os
 import argparse
+import logging
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
+
+# Centralized logging initialization for CLI entrypoint
+from trading_algo.logging_config import init_logging
+
+# Initialize logging once per process; logfile optional via env LOG_FILE
+init_logging(level=os.getenv("LOG_LEVEL", None), logfile=os.getenv("LOG_FILE", None))
+logger = logging.getLogger(__name__)
+
 
 def print_banner():
     banner = r"""
@@ -16,7 +25,8 @@ def print_banner():
 ║ 🚀 Trading Algorithmique Avancé 🚀 ║
 ╚══════════════════════════════════════════════════════════════╝
     """
-    print(banner)
+    logger.info("\n" + banner)
+
 
 def import_modules():
     """Importe tous les modules nécessaires"""
@@ -27,34 +37,34 @@ def import_modules():
         modules['StockDataExtractor'] = StockDataExtractor
         modules['get_stock_overview'] = get_stock_overview
         modules['MacroDataExtractor'] = MacroDataExtractor
-        print("✅ Module data_extraction importé")
+        logger.info("✅ Module data_extraction importé")
     except ImportError as e:
-        print(f"❌ Erreur data_extraction: {e}")
+        logger.error(f"❌ Erreur data_extraction: {e}")
         return None
     
     try:
         from trading_algo.models.stockmodeltrain import StockModelTrain
         modules['StockModelTrain'] = StockModelTrain
-        print("✅ Module stockmodeltrain importé")
+        logger.info("✅ Module stockmodeltrain importé")
     except ImportError as e:
-        print(f"❌ Erreur stockmodeltrain: {e}")
+        logger.error(f"❌ Erreur stockmodeltrain: {e}")
         return None
     
     try:
         from trading_algo.models.stockpredictor import StockPredictor
         modules['StockPredictor'] = StockPredictor
-        print("✅ Module stockpredictor importé")
+        logger.info("✅ Module stockpredictor importé")
     except ImportError as e:
-        print(f"⚠️ Module stockpredictor non disponible: {e}")
+        logger.warning(f"⚠️ Module stockpredictor non disponible: {e}")
         modules['StockPredictor'] = None
     
     try:
         from trading_algo.visualization.dashboard import TradingDashboard, create_comparison_dashboard
         modules['TradingDashboard'] = TradingDashboard
         modules['create_comparison_dashboard'] = create_comparison_dashboard
-        print("✅ Module dashboard importé")
+        logger.info("✅ Module dashboard importé")
     except ImportError as e:
-        print(f"⚠️ Module dashboard non disponible: {e}")
+        logger.warning(f"⚠️ Module dashboard non disponible: {e}")
         modules['TradingDashboard'] = None
         modules['create_comparison_dashboard'] = None
     
@@ -63,22 +73,44 @@ def import_modules():
         from trading_algo.screening.actions_sp500 import screen_sp500, get_sp500_symbols
         modules['screen_sp500'] = screen_sp500
         modules['get_sp500_symbols'] = get_sp500_symbols
-        print("✅ Module actions_sp500 importé")
+        logger.info("✅ Module actions_sp500 importé")
     except ImportError:
-        # Silencieux si pas présent
         modules['screen_sp500'] = None
         modules['get_sp500_symbols'] = None
     
+    # Module portfolio
+    try:
+        from trading_algo.portfolio import Portfolio, Position, Order, PortfolioManager
+        modules['Portfolio'] = Portfolio
+        modules['Position'] = Position
+        modules['Order'] = Order
+        modules['PortfolioManager'] = PortfolioManager
+        logger.info("✅ Module portfolio importé")
+    except ImportError as e:
+        logger.warning(f"⚠️ Module portfolio non disponible: {e}")
+        for name in ['Portfolio', 'Position', 'Order', 'PortfolioManager']:
+            modules[name] = None
+    
+    # Module portfoliodashboard (dashboard spécifique au portefeuille)
+    try:
+        from trading_algo.visualization.portfoliodashboard import PortfolioDashboard
+        modules['PortfolioDashboard'] = PortfolioDashboard
+        logger.info("✅ Module portfoliodashboard importé")
+    except ImportError as e:
+        logger.warning(f"⚠️ Module portfoliodashboard non disponible: {e}")
+        modules['PortfolioDashboard'] = None
+    
     return modules
+
 
 def run_screening(modules):
     """Exécute le screening du S&P 500"""
-    print("\n🔍 SCREENING DU S&P 500")
-    print("=" * 60)
+    logger.info("\n🔍 SCREENING DU S&P 500")
+    logger.info("=" * 60)
     
     screen_sp500 = modules.get('screen_sp500')
     if screen_sp500 is None:
-        print("❌ Module de screening non disponible")
+        logger.error("❌ Module de screening non disponible")
         return
     
     try:
@@ -91,57 +123,56 @@ def run_screening(modules):
         if results['success']:
             stocks = results['stocks']
             
-            print(f"\n📊 RÉSULTATS:")
-            print(f" 🎯 Précision du modèle: {results['metrics']['accuracy']:.3f}")
-            print(f" 📈 Stocks recommandés: {len(stocks)}")
+            logger.info("📊 RÉSULTATS:")
+            logger.info(f" 🎯 Précision du modèle: {results['metrics']['accuracy']:.3f}")
+            logger.info(f" 📈 Stocks recommandés: {len(stocks)}")
             
             if stocks:
-                print(f"\n🏆 ACTIONS RECOMMANDÉES:")
+                logger.info("🏆 ACTIONS RECOMMANDÉES:")
                 for i, stock in enumerate(stocks[:10], 1):
-                    print(f" {i}. {stock['symbol']}:")
-                    print(f" Prix: ${stock['current_price']:.2f}")
-                    print(f" Probabilité: {stock['buy_probability']:.1%}")
-                    print(f" Signal: {stock['signal_strength']}")
+                    logger.info(f" {i}. {stock['symbol']}:")
+                    logger.info(f" Prix: ${stock['current_price']:.2f}")
+                    logger.info(f" Probabilité: {stock['buy_probability']:.1%}")
+                    logger.info(f" Signal: {stock['signal_strength']}")
                     if stock.get('rsi'):
                         rsi = stock['rsi']
                         status = "SURACHAT ⚠️" if rsi > 70 else "SURVENTE ✅" if rsi < 30 else "NEUTRE"
-                        print(f" RSI: {rsi:.1f} ({status})")
-                    print()
+                        logger.info(f" RSI: {rsi:.1f} ({status})")
+                    logger.info("")
             
-            print(f"\n💾 Résultats sauvegardés dans: {results['output_file']}")
-            print("💡 Analysez une action avec: trading-algo SYMBOLE --advanced")
+            logger.info(f"💾 Résultats sauvegardés dans: {results['output_file']}")
+            logger.info("💡 Analysez une action avec: trading-algo SYMBOLE --advanced")
         else:
-            print(f"❌ Erreur: {results['error']}")
+            logger.error(f"❌ Erreur: {results['error']}")
             
     except Exception as e:
-        print(f"❌ Erreur screening: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Erreur screening: {e}", exc_info=True)
     
-    print("=" * 60)
+    logger.info("=" * 60)
+
 
 def compare_stocks(symbols, period, modules):
     """Compare plusieurs actions"""
-    print(f"\n📊 COMPARAISON DE {len(symbols)} ACTIONS")
-    print("=" * 60)
+    logger.info(f"\n📊 COMPARAISON DE {len(symbols)} ACTIONS")
+    logger.info("=" * 60)
     
     try:
         data_dict = {}
         extractor_class = modules['StockDataExtractor']
         
         for symbol in symbols:
-            print(f"\n📈 Récupération des données pour {symbol}...")
+            logger.info(f"\n📈 Récupération des données pour {symbol}...")
             extractor = extractor_class(symbol)
             data = extractor.get_historical_data(period=period)
             
             if not data.empty:
                 data_dict[symbol] = data
-                print(f" ✅ {len(data)} périodes récupérées")
+                logger.info(f" ✅ {len(data)} périodes récupérées")
             else:
-                print(f" ❌ Données non disponibles")
+                logger.warning(f" ❌ Données non disponibles")
         
         if len(data_dict) > 1 and modules.get('create_comparison_dashboard'):
-            print(f"\n📊 Création du dashboard de comparaison...")
+            logger.info("\n📊 Création du dashboard de comparaison...")
             fig = modules['create_comparison_dashboard'](list(data_dict.keys()), data_dict)
             
             if fig:
@@ -149,42 +180,43 @@ def compare_stocks(symbols, period, modules):
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 filename = f"dashboards/comparison_{'_'.join(symbols)}_{timestamp}.html"
                 fig.write_html(filename)
-                print(f"\n✅ Dashboard sauvegardé: {filename}")
-                print("📄 Ouvrez ce fichier dans votre navigateur")
+                logger.info(f"\n✅ Dashboard sauvegardé: {filename}")
+                logger.info("📄 Ouvrez ce fichier dans votre navigateur")
         else:
-            print("❌ Pas assez de données ou module dashboard non disponible")
+            logger.warning("❌ Pas assez de données ou module dashboard non disponible")
             
     except Exception as e:
-        print(f"❌ Erreur comparaison: {e}")
+        logger.error(f"❌ Erreur comparaison: {e}", exc_info=True)
+
 
 def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
     """Analyse une action"""
-    print(f"\n🔍 Analyse pour {symbol} - période: {period}")
-    print("=" * 60)
+    logger.info(f"\n🔍 Analyse pour {symbol} - période: {period}")
+    logger.info("=" * 60)
     
     start_time = datetime.now()
     
     try:
         if advanced and modules.get('StockPredictor'):
-            print("🧠 Utilisation du module avancé StockPredictor...")
+            logger.info("🧠 Utilisation du module avancé StockPredictor...")
             predictor = modules['StockPredictor'](symbol, period)
         else:
-            print("🤖 Utilisation du module de base StockModelTrain...")
+            logger.info("🤖 Utilisation du module de base StockModelTrain...")
             predictor = modules['StockModelTrain'](symbol, period)
         
         if mode == "train":
-            print("\n🤖 Entraînement du modèle...")
+            logger.info("\n🤖 Entraînement du modèle...")
             success = predictor.train(
                 lookback_days=60,
                 epochs=30
             )
             if success:
-                print("✅ Modèle entraîné avec succès!")
+                logger.info("✅ Modèle entraîné avec succès!")
             else:
-                print("❌ Échec de l'entraînement")
+                logger.error("❌ Échec de l'entraînement")
             return
         
-        print(f"\n🔍 Analyse de {symbol}...")
+        logger.info(f"\n🔍 Analyse de {symbol}...")
         
         if advanced and modules.get('StockPredictor'):
             results = predictor.analyze_stock_advanced()
@@ -192,48 +224,48 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
             results = predictor.analyze_model_stock()
         
         if 'error' in results:
-            print(f"❌ Erreur: {results['error']}")
+            logger.error(f"❌ Erreur: {results['error']}")
             return
         
-        print(f"\n📊 RÉSULTATS POUR {symbol}:")
-        print(f" 📈 Prix actuel: ${results['current_price']:.2f}")
-        print(f" 🎯 Score de trading: {results['trading_score']}/10")
-        print(f" 💡 Recommandation: {results['recommendation']}")
+        logger.info(f"\n📊 RÉSULTATS POUR {symbol}:")
+        logger.info(f" 📈 Prix actuel: ${results['current_price']:.2f}")
+        logger.info(f" 🎯 Score de trading: {results['trading_score']}/10")
+        logger.info(f" 💡 Recommandation: {results['recommendation']}")
         
         predictions = results.get('predictions', {})
         if predictions:
-            print("\n 🔮 Prédictions de prix:")
+            logger.info("\n 🔮 Prédictions de prix:")
             for horizon in ['1d', '5d', '10d', '20d', '30d', '90d']:
                 if horizon in predictions and predictions[horizon] is not None:
                     pred = predictions[horizon]
                     change_pct = ((pred - results['current_price']) / results['current_price'] * 100)
-                    print(f" {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
+                    logger.info(f" {horizon}: ${pred:.2f} ({change_pct:+.2f}%)")
         
         # Affichage des métriques de risque si disponibles
         if 'risk_metrics' in results and advanced:
             rm = results['risk_metrics']
-            print("\n⚠️ MÉTRIQUES DE RISQUE:")
+            logger.info("\n⚠️ MÉTRIQUES DE RISQUE:")
             if 'sharpe_ratio' in rm:
-                print(f" Sharpe Ratio: {rm['sharpe_ratio']:.2f}")
+                logger.info(f" Sharpe Ratio: {rm['sharpe_ratio']:.2f}")
             if 'max_drawdown' in rm:
-                print(f" Max Drawdown: {rm['max_drawdown'] * 100:.1f}%")
+                logger.info(f" Max Drawdown: {rm['max_drawdown'] * 100:.1f}%")
             if 'value_at_risk' in rm:
-                print(f" Value at Risk (95%): {rm['value_at_risk'] * 100:.1f}%")
+                logger.info(f" Value at Risk (95%): {rm['value_at_risk'] * 100:.1f}%")
             if 'beta' in rm:
-                print(f" Bêta: {rm['beta']:.2f}")
+                logger.info(f" Bêta: {rm['beta']:.2f}")
             
             if 'stop_loss_levels' in rm:
-                print("\n Niveaux de gestion du risque:")
+                logger.info("\n Niveaux de gestion du risque:")
                 for horizon in ['1d', '5d', '10d', '20d', '30d', '90d']:
                     if horizon in rm['stop_loss_levels']:
                         stop = rm['stop_loss_levels'][horizon]
                         tp = rm['take_profit_levels'].get(horizon, 'N/A')
                         rr = rm['risk_reward_ratios'].get(horizon, 'N/A')
                         pos = rm['suggested_position_sizes'].get(horizon, 'N/A')
-                        print(f" {horizon}: Stop ${stop:.2f}, Target ${tp:.2f}, R/R {rr:.2f}, Position suggérée: {pos:.0f} actions")
+                        logger.info(f" {horizon}: Stop ${stop:.2f}, Target ${tp:.2f}, R/R {rr:.2f}, Position suggérée: {pos:.0f} actions")
         
         if create_dashboard and modules.get('TradingDashboard'):
-            print("\n📊 Création du dashboard...")
+            logger.info("\n📊 Création du dashboard...")
             try:
                 overview = modules['get_stock_overview'](symbol)
                 dashboard = modules['TradingDashboard'](symbol, results['current_price'])
@@ -241,7 +273,7 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
                 # Récupérer les données techniques
                 technical_data = getattr(predictor, 'features', None)
                 if technical_data is None:
-                    print("⚠️ Aucune donnée technique disponible")
+                    logger.warning("⚠️ Aucune donnée technique disponible")
                 
                 # Construire le DataFrame de prédictions
                 predictions_df = pd.DataFrame()
@@ -285,33 +317,148 @@ def analyze_stock(symbol, period, mode, advanced, create_dashboard, modules):
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                     filename = f"dashboards/{symbol}_{timestamp}.html"
                     fig.write_html(filename)
-                    print(f"✅ Dashboard sauvegardé: {filename}")
-                    print("📄 Ouvrez ce fichier dans votre navigateur")
+                    logger.info(f"✅ Dashboard sauvegardé: {filename}")
+                    logger.info("📄 Ouvrez ce fichier dans votre navigateur")
             except Exception as e:
-                print(f"⚠️ Erreur création dashboard: {e}")
+                logger.warning(f"⚠️ Erreur création dashboard: {e}", exc_info=True)
         
     except Exception as e:
-        print(f"❌ Erreur: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Erreur: {e}", exc_info=True)
     
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
     
-    print(f"\n⏱️ Analyse terminée en {duration:.1f} secondes")
-    print("=" * 60)
+    logger.info(f"\n⏱️ Analyse terminée en {duration:.1f} secondes")
+    logger.info("=" * 60)
+
+
+def manage_portfolio(args, modules):
+    """Gère les opérations de portefeuille"""
+    # Récupération des classes depuis modules
+    Portfolio = modules['Portfolio']
+    PortfolioManager = modules['PortfolioManager']
+    PortfolioDashboard = modules.get('PortfolioDashboard')  # Optionnel
+    
+    if Portfolio is None or PortfolioManager is None:
+        logger.error("❌ Module portfolio non disponible")
+        return
+    
+    # Créer le gestionnaire
+    manager = PortfolioManager(modules['StockDataExtractor'])
+    
+    if args.portfolio == "create":
+        if not args.initial_cash:
+            logger.error("❌ Spécifiez --initial-cash pour créer un portefeuille")
+            return
+        
+        portfolio = manager.create_portfolio(args.portfolio_name, args.initial_cash)
+        manager.save_current_portfolio()
+        logger.info(f"✅ Portefeuille '{args.portfolio_name}' créé avec {args.initial_cash}$")
+    
+    elif args.portfolio == "load":
+        portfolio = manager.load_portfolio(args.portfolio_name)
+        if portfolio:
+            logger.info(f"✅ Portefeuille '{args.portfolio_name}' chargé")
+            logger.info(f"💰 Cash: {portfolio.cash:.2f}$")
+            logger.info(f"📊 Positions: {len(portfolio.positions)}")
+        else:
+            logger.error(f"❌ Portefeuille '{args.portfolio_name}' non trouvé")
+    
+    elif args.portfolio == "analyze":
+        portfolio = manager.load_portfolio(args.portfolio_name)
+        if not portfolio:
+            logger.error(f"❌ Portefeuille '{args.portfolio_name}' non trouvé")
+            return
+        
+        logger.info(f"\n📊 ANALYSE DU PORTEFEUILLE: {portfolio.name}")
+        logger.info("=" * 60)
+        
+        analysis = manager.analyze_portfolio()
+        
+        perf = analysis['performance']
+        logger.info("\n💰 PERFORMANCE:")
+        logger.info(f" Valeur totale: ${perf['total_value']:.2f}")
+        logger.info(f" Liquidités: ${perf['cash']:.2f}")
+        logger.info(f" Investi: ${perf['invested']:.2f}")
+        logger.info(f" P&L total: ${perf['total_pnl']:.2f} ({perf['total_pnl_pct']:.2f}%)")
+        
+        logger.info("\n📈 ALLOCATION:")
+        for ticker, alloc in analysis['allocation'].items():
+            if alloc > 0.01:
+                logger.info(f" {ticker}: {alloc*100:.1f}%")
+        
+        if args.dashboard and PortfolioDashboard is not None:
+            # Créer le dashboard
+            dashboard = PortfolioDashboard(portfolio, manager)
+            fig = dashboard.create_portfolio_dashboard(analysis['market_prices'])
+            
+            if fig:
+                os.makedirs("dashboards", exist_ok=True)
+                filename = f"dashboards/portfolio_{args.portfolio_name}.html"
+                fig.write_html(filename)
+                logger.info(f"\n✅ Dashboard sauvegardé: {filename}")
+        elif args.dashboard and PortfolioDashboard is None:
+            logger.warning("⚠️ PortfolioDashboard non disponible, impossible de créer le dashboard")
+    
+    elif args.portfolio == "rebalance":
+        if not args.symbol:
+            logger.error("❌ Spécifiez les allocations cibles (ex: AAPL:0.4,MSFT:0.3,cash:0.3)")
+            return
+        
+        portfolio = manager.load_portfolio(args.portfolio_name)
+        if not portfolio:
+            logger.error(f"❌ Portefeuille '{args.portfolio_name}' non trouvé")
+            return
+        
+        # Parser les allocations
+        target_allocation = {}
+        for item in args.symbol.split(','):
+            ticker, pct = item.split(':')
+            target_allocation[ticker] = float(pct)
+        
+        orders, impact = manager.suggest_rebalance(target_allocation)
+        
+        logger.info(f"\n🔄 RÉÉQUILIBRAGE PROPOSÉ")
+        logger.info("=" * 60)
+        logger.info(f" Ordres: {impact['orders_count']}")
+        logger.info(f" Volume total: ${impact['total_trade_value']:.2f}")
+        logger.info(f" Impact: {impact['total_trade_pct']*100:.1f}% du portefeuille")
+        
+        if orders:
+            logger.info(f"\n📝 ORDRES À EXÉCUTER:")
+            for order in orders:
+                logger.info(f" {order.order_type.upper()} {order.quantity:.2f} {order.ticker} @ ${order.limit_price:.2f}")
+            
+            confirm = input("\nExécuter ces ordres? (o/n): ").lower()
+            if confirm == 'o':
+                # Exécuter les ordres
+                market_prices = manager.get_market_prices(list(target_allocation.keys()))
+                for order in orders:
+                    if order.order_type == 'buy':
+                        portfolio.add_position(order.ticker, order.quantity, market_prices[order.ticker])
+                    else:
+                        portfolio.remove_position(order.ticker, order.quantity, market_prices[order.ticker])
+                
+                manager.save_current_portfolio()
+                logger.info("✅ Ordres exécutés et portefeuille sauvegardé")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Système d'Analyse Boursière avec IA")
     parser.add_argument("symbol", nargs="?", help="Symbole boursier (ex: AAPL)")
-    parser.add_argument("--period", default="1y", choices=["1mo", "3mo", "6mo", "1y", "2y", "5y"],
+    parser.add_argument("--period", default="3y", choices=["1mo", "3mo", "6mo", "1y", "2y", "5y"],
                         help="Période d'analyse")
     parser.add_argument("--interactive", action="store_true", help="Lancer le mode interactif (choix des actions)")
     parser.add_argument("--mode", choices=["analyze", "train", "dashboard", "compare", "screen"],
                         default="analyze", help="Mode d'exécution")
     parser.add_argument("--advanced", action="store_true", help="Utiliser le module avancé StockPredictor")
+    parser.add_argument("--portfolio", help="Gérer un portefeuille (create, load, analyze, rebalance)")
+    parser.add_argument("--portfolio-name", default="default", help="Nom du portefeuille")
+    parser.add_argument("--initial-cash", type=float, help="Cash initial pour créer un portefeuille")
     parser.add_argument("--dashboard", action="store_true", help="Créer un dashboard après analyse")
-    
+    parser.add_argument("--web", action="store_true", help="Lancer l'interface web Dash")
+
+
     if len(sys.argv) == 1:
         parser.print_help()
         return
@@ -321,12 +468,27 @@ def main():
     print_banner()
     
     # Importer les modules
-    print("\n📦 Chargement des modules...")
+    logger.info("\n📦 Chargement des modules...")
     modules = import_modules()
     
     if modules is None:
-        print("❌ Impossible de charger les modules nécessaires")
-        print(" Vérifiez que tous les fichiers sont correctement installés")
+        logger.error("❌ Impossible de charger les modules nécessaires")
+        logger.error(" Vérifiez que tous les fichiers sont correctement installés")
+        return
+    
+    # Dans la fonction main(), après le chargement des modules
+    if args.web:
+        logger.info("🌐 Lancement de l'interface web Dash...")
+        try:
+            from trading_algo.web_dashboard.app import app
+            app.run(debug=True, host='0.0.0.0', port=8050)
+        except Exception as e:
+            logger.error(f"❌ Erreur lors du lancement du serveur web: {e}", exc_info=True)
+        return    
+    
+    # Mode portfolio
+    if args.portfolio:
+        manage_portfolio(args, modules)
         return
     
     # Mode screening
@@ -337,12 +499,12 @@ def main():
     # Mode comparaison
     if args.mode == "compare":
         if not args.symbol:
-            print("❌ Veuillez spécifier des symboles à comparer (ex: AAPL,MSFT,GOOGL)")
+            logger.error("❌ Veuillez spécifier des symboles à comparer (ex: AAPL,MSFT,GOOGL)")
             return
         
         symbols = [s.strip().upper() for s in args.symbol.split(',')]
         if len(symbols) < 2:
-            print("❌ Veuillez spécifier au moins 2 symboles")
+            logger.error("❌ Veuillez spécifier au moins 2 symboles")
             return
         
         compare_stocks(symbols, args.period, modules)
@@ -364,10 +526,10 @@ def main():
             '8': 'SPY',
         }
         
-        print("\n📈 ACTIONS POPULAIRES:")
+        logger.info("\n📈 ACTIONS POPULAIRES:")
         for key, value in popular_stocks.items():
-            print(f" {key}. {value}")
-        print(" 0. Entrer un symbole personnalisé")
+            logger.info(f" {key}. {value}")
+        logger.info(" 0. Entrer un symbole personnalisé")
         
         choice = input("\nChoisissez une action (1-8) ou 0 pour personnalisé: ").strip()
         
@@ -376,7 +538,7 @@ def main():
         elif choice in popular_stocks:
             symbol = popular_stocks[choice]
         else:
-            print("Choix invalide, utilisation de AAPL par défaut")
+            logger.warning("Choix invalide, utilisation de AAPL par défaut")
             symbol = 'AAPL'
     
     # Exécuter l'analyse
@@ -390,4 +552,13 @@ def main():
     )
 
 if __name__ == "__main__":
+    # Test rapide du module portfolio (optionnel)
+    try:
+        from trading_algo.portfolio import Portfolio
+        p = Portfolio(cash=10000)
+        p.add_position('AAPL', 10, 150)
+        logger.info("✅ Test portfolio réussi")
+    except Exception as e:
+        logger.error(f"❌ Test portfolio échoué: {e}", exc_info=True)
+    
     main()

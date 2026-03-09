@@ -31,14 +31,61 @@ from functools import lru_cache
 import warnings
 warnings.filterwarnings('ignore')
 
-# Configuration du logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-
+# Do not configure logging here. The application entrypoint must call init_logging().
 logger = logging.getLogger(__name__)
+
+# -- Helper: robust Yahoo Finance symbol resolution for historic queries ----------
+def _yf_history_with_fallback(symbol: str, period: str, interval: str) -> pd.DataFrame:
+    """
+    Attempt to fetch history from yfinance trying several common symbol variations.
+
+    Typical problematic cases:
+      - Canadian tickers like "BN.TO" sometimes stored/entered as "BN-TO" or vice-versa.
+      - Some data sources may store tickers without the exchange suffix.
+
+    Strategy:
+      - Try the original symbol.
+      - Try '.' -> '-' and '-' -> '.' variants.
+      - Try uppercase/lowercase normalizations.
+      - Return the first non-empty DataFrame found (or empty DF if none).
+    """
+    tried = []
+    candidates = [symbol]
+
+    # Add common swaps between '.' and '-'
+    if '.' in symbol:
+        candidates.append(symbol.replace('.', '-'))
+    if '-' in symbol:
+        candidates.append(symbol.replace('-', '.'))
+
+    # uppercase fallback
+    if symbol.upper() not in candidates:
+        candidates.append(symbol.upper())
+
+    # Ensure uniqueness while preserving order
+    seen = set()
+    candidates_unique = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            candidates_unique.append(c)
+
+    for cand in candidates_unique:
+        try:
+            tried.append(cand)
+            ticker = yf.Ticker(cand)
+            df = ticker.history(period=period, interval=interval)
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                if cand != symbol:
+                    logger.info(f"yfinance: used alternative symbol '{cand}' for requested '{symbol}'")
+                return df
+        except Exception as e:
+            # keep trying other candidates; log at debug level to avoid noisy output
+            logger.debug(f"yfinance history attempt failed for {cand}: {e}")
+
+    # If nothing returned, log once and return empty DataFrame
+    logger.warning(f"yfinance: no historical data for {symbol} (tried: {', '.join(tried)})")
+    return pd.DataFrame()
 
 # Charger les variables d'environnement
 from dotenv import load_dotenv
@@ -1186,7 +1233,7 @@ class MacroDataExtractor:
                         current = hist['Close'].iloc[-1]
                         previous = hist['Close'].iloc[-2] if len(hist) > 1 else current
                         change = ((current - previous) / previous * 100) if previous != 0 else 0
-                        
+                                                
                         indicators[name] = {
                             'value': float(current),
                             'change': float(change),
@@ -1354,47 +1401,50 @@ if __name__ == "__main__":
     # Exemple d'utilisation
     symbol = "AAPL"
     
-    print("🔍 Test du module data_extraction")
-    print("=" * 50)
+    logger.info("🔍 Test du module data_extraction")
+    logger.info("=" * 50)
     
     # Test de l'aperçu
-    print("\n1. Aperçu de l'action:")
+    logger.info("\n1. Aperçu de l'action:")
     overview = get_stock_overview(symbol)
-    print(f"   Nom: {overview.get('name')}")
-    print(f"   Prix: {overview.get('current_price')}")
-    print(f"   Market Cap: {overview.get('market_cap')}")
+    logger.info(f"   Nom: {overview.get('name')}")
+    logger.info(f"   Prix: {overview.get('current_price')}")
+    logger.info(f"   Market Cap: {overview.get('market_cap')}")
     
     # Test de l'extracteur de données
-    print("\n2. Extraction des données:")
+    logger.info("\n2. Extraction des données:")
     extractor = StockDataExtractor(symbol)
     data = extractor.get_historical_data(period="1y")
-    print(f"   Données récupérées: {len(data)} jours")
+    logger.info(f"   Données récupérées: {len(data)} jours")
     
     # Test des indicateurs techniques
     if not data.empty:
-        print("\n3. Indicateurs techniques:")
+        logger.info("\n3. Indicateurs techniques:")
         technicals = extractor.calculate_technical_indicators(data)
-        print(f"   Colonnes techniques: {len(technicals.columns)}")
-        print(f"   Dernier RSI: {technicals['RSI'].iloc[-1]:.2f}" if 'RSI' in technicals.columns else "   RSI: Non calculé")
+        logger.info(f"   Colonnes techniques: {len(technicals.columns)}")
+        if 'RSI' in technicals.columns:
+            logger.info(f"   Dernier RSI: {technicals['RSI'].iloc[-1]:.2f}")
+        else:
+            logger.info("   RSI: Non calculé")
     
     # Test de l'API X (Twitter)
-    print("\n4. Sentiment X (Twitter):")
+    logger.info("\n4. Sentiment X (Twitter):")
     sentiment = extractor.get_sentiment_from_x(symbol)
-    print(f"   Score de sentiment: {sentiment.get('avg_sentiment', 0):.2f}")
-    print(f"   Label: {sentiment.get('sentiment_label', 'N/A')}")
-    print(f"   Nombre de tweets: {sentiment.get('tweet_count', 0)}")
+    logger.info(f"   Score de sentiment: {sentiment.get('avg_sentiment', 0):.2f}")
+    logger.info(f"   Label: {sentiment.get('sentiment_label', 'N/A')}")
+    logger.info(f"   Nombre de tweets: {sentiment.get('tweet_count', 0)}")
     
     # Test de l'API NY Times
-    print("\n5. Actualités NY Times:")
+    logger.info("\n5. Actualités NY Times:")
     news = extractor.get_news_from_nyt(symbol, days=7)
-    print(f"   Nombre d'articles: {news.get('total_articles', 0)}")
+    logger.info(f"   Nombre d'articles: {news.get('total_articles', 0)}")
     if news.get('articles'):
-        print(f"   Premier article: {news['articles'][0].get('headline', 'N/A')[:50]}...")
+        logger.info(f"   Premier article: {news['articles'][0].get('headline', 'N/A')[:50]}...")
     
     # Test des données macro
-    print("\n6. Données macroéconomiques:")
+    logger.info("\n6. Données macroéconomiques:")
     macro = MacroDataExtractor()
     us_indicators = macro.get_economic_indicators("US")
-    print(f"   Indicateurs US: {len(us_indicators)}")
+    logger.info(f"   Indicateurs US: {len(us_indicators)}")
     
-    print("\n✅ Tests terminés!")
+    logger.info("\n✅ Tests terminés!")

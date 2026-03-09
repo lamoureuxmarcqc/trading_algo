@@ -21,11 +21,7 @@ from sklearn.pipeline import Pipeline
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
-
-
-
-    
-logging.basicConfig(level=logging.INFO)
+# Logging must be configured centrally by the entrypoint; modules should only fetch a logger
 logger = logging.getLogger(__name__)
 
 
@@ -318,7 +314,7 @@ class StockScreener:
                 if last_row is not None and len(last_row) > 0:
                     # Prédiction
                     proba = self.model.predict_proba([last_row])[0]
-                    buy_probability = proba[1]  # Probabilité de classe positive (achat)
+                    buy_probability = proba[1] # Probabilité de classe positive (achat)
                     
                     # Informations sur le stock
                     current_price = df['Close'].iloc[-1]
@@ -545,8 +541,8 @@ def main():
     
     args = parser.parse_args()
     
-    print("🚀 SCREENING S&P 500 - Analyse d'actions avec IA")
-    print("=" * 60)
+    logger.info("🚀 SCREENING S&P 500 - Analyse d'actions avec IA")
+    logger.info("=" * 60)
     
     results = screen_sp500(
         lookback_years=args.lookback,
@@ -559,29 +555,37 @@ def main():
         report = results['report']
         stocks = results['stocks']
         
-        print(f"\n📊 RÉSULTATS DU SCREENING:")
-        print(f"   📅 Date: {report['screening_date'].split('T')[0]}")
-        print(f"   🎯 Précision du modèle: {results['metrics']['accuracy']:.3f}")
-        print(f"   📈 Stocks recommandés: {report['total_screened_stocks']}")
+        logger.info("\n📊 RÉSULTATS DU SCREENING:")
+        logger.info(f"   📅 Date: {report['screening_date'].split('T')[0]}")
+        logger.info(f"   🎯 Précision du modèle: {results['metrics']['accuracy']:.3f}")
+        logger.info(f"   📈 Stocks recommandés: {report['total_screened_stocks']}")
         
         if stocks:
-            print(f"\n🏆 TOP 5 ACTIONS RECOMMANDÉES:")
+            logger.info("\n🏆 TOP 5 ACTIONS RECOMMANDÉES:")
             for i, stock in enumerate(stocks[:5], 1):
-                print(f"   {i}. {stock['symbol']}:")
-                print(f"      Prix: ${stock['current_price']:.2f}")
-                print(f"      Probabilité achat: {stock['buy_probability']:.1%}")
-                print(f"      Signal: {stock['signal_strength']}")
+                logger.info(f"   {i}. {stock['symbol']}:")
+                logger.info(f"      Prix: ${stock['current_price']:.2f}")
+                logger.info(f"      Probabilité achat: {stock['buy_probability']:.1%}")
+                logger.info(f"      Signal: {stock['signal_strength']}")
                 if stock['rsi']:
-                    print(f"      RSI: {stock['rsi']:.1f}")
-                print()
+                    logger.info(f"      RSI: {stock['rsi']:.1f}")
+                logger.info("")
         
-        print(f"\n💾 Résultats sauvegardés: {results['output_file']}")
-        print("💡 Conseil: Analysez ces actions avec le module principal pour plus de détails")
+        logger.info(f"\n💾 Résultats sauvegardés: {results['output_file']}")
+        logger.info("💡 Conseil: Analysez ces actions avec le module principal pour plus de détails")
     else:
-        print(f"❌ Erreur: {results['error']}")
+        logger.error(f"❌ Erreur: {results['error']}")
     
-    print("=" * 60)
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
+    # Initialize logging for CLI execution
+    try:
+        from trading_algo.logging_config import init_logging
+        init_logging(level=os.getenv("LOG_LEVEL", None), logfile=os.getenv("LOG_FILE", None))
+    except Exception:
+        # fallback for environments where package import may not work
+        import logging as _logging
+        _logging.basicConfig(level=_logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     main()
