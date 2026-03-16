@@ -36,6 +36,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["black", "flake8", "pytest"]
+deploy = ["dash[cloud]"]
 
 [project.scripts]
 trading-algo = "trading_algo.__main__:main"

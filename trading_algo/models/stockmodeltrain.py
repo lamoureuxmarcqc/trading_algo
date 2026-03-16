@@ -230,16 +230,21 @@ class StockModelTrain:
             return None, None, None, None
     
     def _create_sequences(self, X: np.ndarray, y: np.ndarray, lookback_days: int) -> Tuple:
-        """Crée des séquences pour les modèles LSTM"""
+        """Crée des séquences pour les modèles LSTM (dtype float32 pour économie mémoire)"""
+        # If not enough rows, return empty arrays with correct dtype
         if len(X) <= lookback_days:
-            return np.array([]).reshape(0, lookback_days, X.shape[1]), np.array([]).reshape(0, y.shape[1])
+            return (
+                np.empty((0, lookback_days, X.shape[1]), dtype=np.float32),
+                np.empty((0, y.shape[1]), dtype=np.float32),
+            )
         
-        X_seq = np.zeros((len(X) - lookback_days, lookback_days, X.shape[1]))
-        y_seq = np.zeros((len(X) - lookback_days, y.shape[1]))
+        # Allocate as float32 to halve memory usage vs float64
+        X_seq = np.zeros((len(X) - lookback_days, lookback_days, X.shape[1]), dtype=np.float32)
+        y_seq = np.zeros((len(X) - lookback_days, y.shape[1]), dtype=np.float32)
         
         for i in range(lookback_days, len(X)):
-            X_seq[i - lookback_days] = X[i - lookback_days:i]
-            y_seq[i - lookback_days] = y[i]
+            X_seq[i - lookback_days] = X[i - lookback_days:i].astype(np.float32)
+            y_seq[i - lookback_days] = y[i].astype(np.float32)
         
         return X_seq, y_seq
 
@@ -557,6 +562,88 @@ class StockModelTrain:
         except Exception as e:
             logger.error(f"Erreur lors de l'entraînement: {e}", exc_info=True)
             return False
+
+    # Ajoutez cette méthode dans la classe StockModelTrain (par exemple juste avant def export_training_data)
+    def train_on_arrays(self,
+                        X_train: np.ndarray,
+                        y_train: np.ndarray,
+                        X_val: Optional[np.ndarray] = None,
+                        y_val: Optional[np.ndarray] = None,
+                        epochs: int = 50,
+                        batch_size: int = 32,
+                        model_dir: Optional[str] = None,
+                        callbacks: Optional[List[Any]] = None) -> Any:
+        """
+        Entraîne le modèle à partir de tableaux numpy pré-préparés (float32).
+        Conserve les conventions et la sauvegarde de StockModelTrain.train().
+        """
+        try:
+            # Sanity / casting
+            X_train = X_train.astype(np.float32)
+            y_train = y_train.astype(np.float32)
+            if X_val is not None:
+                X_val = X_val.astype(np.float32)
+            if y_val is not None:
+                y_val = y_val.astype(np.float32)
+
+            # Configuration par défaut des callbacks si non fournis
+            cb = callbacks or []
+            cb += [
+                tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=self.patience_early_stopping, restore_best_weights=True),
+                tf.keras.callbacks.ReduceLROnPlateau(monitor="val_loss", patience=max(3, self.patience_early_stopping//4), factor=0.2)
+            ]
+
+            # Build model (réutiliser base_model.ImprovedLSTMPredictorMultiOutput)
+            n_features = X_train.shape[2]
+            n_outputs = y_train.shape[1]
+            # Use similar architecture choices as train()
+            model = ImprovedLSTMPredictorMultiOutput(
+                lstm_units1=64,
+                lstm_units2=32,
+                lstm_units3=16,
+                dense_units=64,
+                dropout_rate=0.3,
+                recurrent_dropout=0.2,
+                l2_reg=0.001,
+                n_outputs=n_outputs
+            )
+            optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+            model.compile(optimizer=optimizer, loss="huber", metrics=["mae", "mse"])
+
+            # Fit
+            history = model.fit(
+                X_train, y_train,
+                validation_data=(X_val, y_val) if (X_val is not None and y_val is not None) else None,
+                epochs=epochs,
+                batch_size=batch_size,
+                callbacks=cb,
+                shuffle=True,
+                verbose=1
+            )
+
+            # Assign and save model & metadata
+            self.model = model
+            if model_dir is None:
+                model_dir = f"models_saved/{self.symbol or 'batch'}"
+            os.makedirs(model_dir, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_path = os.path.join(model_dir, f"model_{ts}.keras")
+            model.save(model_path)
+            # Save scalers if present on self
+            try:
+                with open(os.path.join(model_dir, f"feature_scaler_{ts}.pkl"), "wb") as f:
+                    pickle.dump(self.feature_scaler, f)
+                with open(os.path.join(model_dir, f"target_scaler_{ts}.pkl"), "wb") as f:
+                    pickle.dump(self.target_scaler, f)
+            except Exception:
+                logger.debug("Impossible de sauvegarder les scalers (debug).")
+
+            logger.info(f"Model entraîné et sauvegardé: {model_path}")
+            return history
+
+        except Exception as e:
+            logger.error(f"Erreur train_on_arrays: {e}", exc_info=True)
+            raise
     
     def validate_on_test(self, X_test_seq, y_test_seq):
         """
@@ -799,6 +886,188 @@ class StockModelTrain:
         except Exception as e:
             logger.error(f"Erreur stockmodeltrain.create_dashboard: {e}", exc_info=True)
 
+
+    @staticmethod
+    def _sequence_batch_generator_from_arrays(X: np.ndarray,
+                                              y: np.ndarray,
+                                              lookback_days: int,
+                                              batch_size: int):
+        """
+        Yield batches of sliding windows from X,y without allocating the full tensor.
+        Produces (X_batch, y_batch) with dtype float32.
+        """
+        if X is None or y is None:
+            return
+        n = len(X)
+        if n <= lookback_days:
+            return
+
+        buf_X = []
+        buf_y = []
+        for i in range(lookback_days, n):
+            buf_X.append(X[i - lookback_days:i].astype(np.float32))
+            buf_y.append(y[i].astype(np.float32))
+            if len(buf_X) >= batch_size:
+                yield np.stack(buf_X), np.stack(buf_y)
+                buf_X = []
+                buf_y = []
+
+        # leftover
+        if buf_X:
+            yield np.stack(buf_X), np.stack(buf_y)
+
+    @staticmethod
+    def combined_data_generator(collected: Dict[str, Dict[str, pd.DataFrame]],
+                                common_feature_cols: List[str],
+                                common_target_cols: List[str],
+                                feature_scaler,
+                                target_scaler,
+                                lookback_days: int,
+                                batch_size: int):
+        """
+        Generator that iterates over collected symbols and yields batches.
+        It loops indefinitely (suitable for model.fit(generator, steps_per_epoch=...)).
+        collected: {symbol: {'features': df, 'targets': df}}
+        """
+        # Precompute per-symbol scaled arrays to avoid repeated scaling inside tight loop
+        scaled_map = {}
+        for sym, data in collected.items():
+            X_df = data['features'][common_feature_cols].replace([np.inf, -np.inf], np.nan).ffill().bfill().fillna(0)
+            y_df = data['targets'][common_target_cols].replace([np.inf, -np.inf], np.nan).ffill().bfill().fillna(0)
+            if len(X_df) <= lookback_days or len(y_df) <= lookback_days:
+                continue
+            X_scaled = feature_scaler.transform(X_df.values).astype(np.float32)
+            y_scaled = target_scaler.transform(y_df.values).astype(np.float32)
+            scaled_map[sym] = (X_scaled, y_scaled)
+
+        if not scaled_map:
+            # No data
+            while True:
+                # yield dummy small arrays to satisfy fit if called incorrectly
+                yield (np.zeros((1, lookback_days, len(common_feature_cols)), dtype=np.float32),
+                       np.zeros((1, len(common_target_cols)), dtype=np.float32))
+
+        # Infinite loop for Keras generator API
+        while True:
+            for sym, (X_scaled, y_scaled) in scaled_map.items():
+                for Xb, yb in StockModelTrain._sequence_batch_generator_from_arrays(X_scaled, y_scaled, lookback_days, batch_size):
+                    yield Xb, yb
+
+    def train_with_generator(self,
+                             data_gen,
+                             steps_per_epoch: int,
+                             validation_gen: Optional[Any] = None,
+                             validation_steps: Optional[int] = None,
+                             epochs: int = 50,
+                             batch_size: int = 32,
+                             model_dir: Optional[str] = None,
+                             additional_callbacks: Optional[List[Any]] = None):
+        """
+        Train from a Python generator (streaming). Keeps the same saving/callback behaviour as train().
+        data_gen: generator yielding (X_batch, y_batch)
+        steps_per_epoch: number of batches per epoch
+        validation_gen/validation_steps: optional validation generator + steps
+        """
+        try:
+            # Build callbacks consistent with existing train()
+            cbs = additional_callbacks[:] if additional_callbacks else []
+            cbs += [
+                tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=self.patience_early_stopping, restore_best_weights=True),
+                tf.keras.callbacks.ReduceLROnPlateau(monitor="val_loss", patience=max(3, self.patience_early_stopping // 4), factor=0.2)
+            ]
+
+            # Determine output dimension from target_scaler if available
+            # Otherwise infer from first batch pulled from generator (peek)
+            try:
+                # peek first batch
+                import itertools
+                first = next(itertools.islice(data_gen, 0, 1), None)
+                # If we got a batch, we need to create a new generator wrapper since we consumed one
+            except Exception:
+                first = None
+
+            # NOTE: For safety, the caller should supply a fresh generator (or a callable that returns one).
+            # If data_gen is a callable returning generator, use it to obtain fresh generators for fit and validation.
+            if callable(data_gen):
+                train_gen = data_gen()
+            else:
+                train_gen = data_gen
+
+            val_gen = None
+            if validation_gen:
+                val_gen = validation_gen() if callable(validation_gen) else validation_gen
+
+            # Build model architecture (use same conventions as train())
+            # We need n_features and n_outputs: infer from a small batch if possible
+            sample_X, sample_y = None, None
+            # attempt to peek safely
+            try:
+                sample_X, sample_y = next(train_gen)
+            except Exception:
+                # If generator can't be peeked, raise
+                logger.error("train_with_generator: unable to fetch sample batch from generator for shape inference")
+                raise RuntimeError("Generator must yield at least one batch for shape inference")
+
+            # Create a wrapper generator for training that will re-yield sample then continue with original stream
+            def _prepend_sample_and_forward(sample, gen):
+                # first yield sample, then forward the rest
+                yielded = False
+                if sample is not None:
+                    yield sample
+                    yielded = True
+                for batch in gen:
+                    yield batch
+
+            # Wrap train_gen with sample re-inserted
+            train_gen = _prepend_sample_and_forward((sample_X.astype(np.float32), sample_y.astype(np.float32)), train_gen)
+
+            n_features = int(sample_X.shape[2])
+            n_outputs = int(sample_y.shape[1])
+
+            # Build model
+            model = ImprovedLSTMPredictorMultiOutput(
+                lstm_units1=64, lstm_units2=32, lstm_units3=16,
+                dense_units=64, dropout_rate=0.3, recurrent_dropout=0.2,
+                l2_reg=0.001, n_outputs=n_outputs
+            )
+            optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+            model.compile(optimizer=optimizer, loss="huber", metrics=["mae", "mse"])
+
+            # Fit
+            history = model.fit(
+                train_gen,
+                steps_per_epoch=steps_per_epoch,
+                validation_data=val_gen,
+                validation_steps=validation_steps,
+                epochs=epochs,
+                callbacks=cbs,
+                verbose=1
+            )
+
+            # assign and save
+            self.model = model
+            if model_dir is None:
+                model_dir = f"models_saved/{self.symbol or 'batch'}"
+            os.makedirs(model_dir, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_path = os.path.join(model_dir, f"model_{ts}.keras")
+            model.save(model_path)
+
+            # save scalers if present
+            try:
+                with open(os.path.join(model_dir, f"feature_scaler_{ts}.pkl"), "wb") as f:
+                    pickle.dump(self.feature_scaler, f)
+                with open(os.path.join(model_dir, f"target_scaler_{ts}.pkl"), "wb") as f:
+                    pickle.dump(self.target_scaler, f)
+            except Exception:
+                logger.debug("Could not save scalers")
+
+            logger.info(f"Model trained and saved: {model_path}")
+            return history
+
+        except Exception as e:
+            logger.error(f"Error train_with_generator: {e}", exc_info=True)
+            raise
 
 def main():
     """Fonction principale d'exécution dans stockmodeltrain"""

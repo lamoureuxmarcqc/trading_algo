@@ -24,6 +24,10 @@ setup(
         "dash-cytoscape>=1.0.0,<2.0.0"   # Si vous l'utilisez
     ],
     python_requires=">=3.8",
+    extras_require={
+        "dev": ["black", "flake8", "pytest"],
+        "deploy": ["dash[cloud]"],  # optional dependencies for Dash Cloud / Enterprise
+    },
     entry_points={
         "console_scripts": [
             "trading-algo = trading_algo.__main__:main",   # ⚠️ underscore !!!

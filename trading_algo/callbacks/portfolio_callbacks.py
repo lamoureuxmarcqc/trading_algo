@@ -81,16 +81,16 @@ def register_portfolio_callbacks(app):
             fig_pnl = go.Figure()
         
         return summary, fig_alloc, fig_perf, fig_pnl, analysis
-    
-    @app.callback(
-        Output('tab-content', 'children'),
-        Input('main-tabs', 'value')
-    )
-    def render_content(tab):
-        from web_dashboard.layouts.portfolio_layout import portfolio_layout
-        from web_dashboard.layouts.symbol_layout import symbol_layout
-        
-        if tab == 'tab-portfolio':
-            return portfolio_layout()
-        elif tab == 'tab-symbol':
-            return symbol_layout()
+
+# NOTE:
+# The callback that previously wrote to 'tab-content' was removed from this module.
+# The app-level callback responsible for rendering tab content must be defined once
+# (see trading_algo/web_dashboard/app.py). Having multiple callbacks outputting to the
+# same property causes the Dash error:
+# "Output ... is already in use."
+#
+# If you need to switch tab content from here, either:
+# - Emit an intermediate dcc.Store value and let the single app callback read that store, or
+# - Merge the tab rendering logic into one callback (recommended).
+#
+# This file focuses on portfolio-related callbacks only

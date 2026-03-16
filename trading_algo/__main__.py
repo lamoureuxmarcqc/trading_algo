@@ -457,6 +457,11 @@ def main():
     parser.add_argument("--initial-cash", type=float, help="Cash initial pour créer un portefeuille")
     parser.add_argument("--dashboard", action="store_true", help="Créer un dashboard après analyse")
     parser.add_argument("--web", action="store_true", help="Lancer l'interface web Dash")
+    parser.add_argument("--batch", action="store_true", help="Lancer le mode batch d'entraînement (unified model)")
+    parser.add_argument("--batch-symbols-file", help="Fichier (une ligne par ticker) pour le mode batch")
+    parser.add_argument("--batch-epochs", type=int, default=30, help="Epochs pour le mode batch")
+    parser.add_argument("--batch-lookback", type=int, default=60, help="Lookback jours pour le mode batch")
+    parser.add_argument("--batch-max-symbols", type=int, default=500, help="Nombre maximum de symboles pour batch")
 
 
     if len(sys.argv) == 1:
@@ -481,7 +486,7 @@ def main():
         logger.info("🌐 Lancement de l'interface web Dash...")
         try:
             from trading_algo.web_dashboard.app import app
-            app.run(debug=True, host='0.0.0.0', port=8050)
+            app.run(debug=True, host='localhost', port=8050)
         except Exception as e:
             logger.error(f"❌ Erreur lors du lancement du serveur web: {e}", exc_info=True)
         return    
@@ -508,6 +513,36 @@ def main():
             return
         
         compare_stocks(symbols, args.period, modules)
+        return
+
+    # Mode batch: entraînement d'un modèle unique sur plusieurs symboles
+    if args.batch:
+        logger.info("🔁 Lancement du mode batch d'entraînement")
+        try:
+            from trading_algo.batch.trainer import BatchTrainer
+            # load symbols from file if provided, else try S&P500 list
+            symbols = []
+            if args.batch_symbols_file:
+                with open(args.batch_symbols_file, 'r', encoding='utf-8') as f:
+                    symbols = [line.strip().upper() for line in f if line.strip()]
+            elif modules.get('get_sp500_symbols'):
+                symbols = modules['get_sp500_symbols']()
+            else:
+                # fallback minimal set
+                symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA']
+
+            trainer = BatchTrainer(
+                symbols=symbols,
+                period="20y",
+                lookback=args.batch_lookback,
+                epochs=args.batch_epochs,
+                batch_size=32,
+                output_dir="models_saved/batch",
+                max_symbols=args.batch_max_symbols,
+            )
+            trainer.run()
+        except Exception as e:
+            logger.error(f"Erreur mode batch: {e}", exc_info=True)
         return
     
     # Mode analyse/train/dashboard pour une action
@@ -553,12 +588,12 @@ def main():
 
 if __name__ == "__main__":
     # Test rapide du module portfolio (optionnel)
-    try:
+    '''try:
         from trading_algo.portfolio import Portfolio
         p = Portfolio(cash=10000)
         p.add_position('AAPL', 10, 150)
         logger.info("✅ Test portfolio réussi")
     except Exception as e:
         logger.error(f"❌ Test portfolio échoué: {e}", exc_info=True)
-    
+     '''
     main()
