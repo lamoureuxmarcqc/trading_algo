@@ -1,5 +1,5 @@
 # python trading_algo/callbacks/market_callbacks.py
-from dash import Input, Output, State, html
+from dash import Input, Output, State, html, dcc
 from trading_algo.visualization.market_dashboard import MarketDashboard
 from trading_algo.data.data_extraction import StockDataExtractor, MacroDataExtractor
 import pandas as pd
@@ -34,6 +34,9 @@ def _reconstruct_indices(indices_cache):
             dates = pd.to_datetime(d.get('dates', []))
             closes = d.get('closes', [])
             if len(dates) != len(closes):
+                # fallback: try to align by length
+                closes = closes[-len(dates):] if len(closes) >= len(dates) else closes
+            if len(dates) != len(closes):
                 continue
             df = pd.DataFrame({'Close': closes}, index=dates)
             res[sym] = df
@@ -44,15 +47,21 @@ def _reconstruct_indices(indices_cache):
 def register_market_callbacks(app):
     @app.callback(
         Output('market-overview-fig', 'figure'),
+        Output('market-cache-raw', 'children'),
         Input('market-refresh-btn', 'n_clicks'),
-        State('market-period-dropdown', 'value'),
+        Input('market-period-dropdown', 'value'),
+        Input('market-sector-filter', 'value'),
+        State('market-auto-refresh', 'value'),
     )
-    def update_market_overview(n_clicks, period):
+    def update_market_overview(n_clicks, period, sector_filter, auto_refresh_val):
         """
         Prefer cached snapshot produced by background job. If absent use a lightweight live fetch.
+        Filters top movers by sector (sector_filter='ALL' means no filter).
         """
         try:
+            # if auto-refresh is turned off and this was triggered by interval/auto, respect it (handled by caller)
             cache = _read_cache()
+            macro = {}
             if cache:
                 indices = _reconstruct_indices(cache.get('indices'))
                 sector_perf = pd.DataFrame(cache.get('sector_perf', []))
@@ -71,46 +80,68 @@ def register_market_callbacks(app):
                     except Exception as e:
                         logger.debug(f"index fetch error {symbol}: {e}")
                 sector_perf = pd.DataFrame({'sector': ['Tech','Health','Financials'], 'perf': [1.2, -0.5, 0.8]})
-                top_gainers = pd.DataFrame({'symbol':['AAPL','TSLA'],'perf':[2.3,-3.1],'volume':[1_000_000,2_000_000]})
+                top_gainers = pd.DataFrame({'symbol':['AAPL','TSLA'],'perf':[2.3,-3.1],'sector':['Technology','Automotive'],'volume':[1_000_000,2_000_000]})
                 top_losers = top_gainers.copy()
 
+            # Filter top movers by sector if requested
+            if isinstance(top_gainers, pd.DataFrame) and sector_filter and sector_filter != 'ALL':
+                try:
+                    top_gainers = top_gainers[top_gainers['sector'] == sector_filter]
+                except Exception:
+                    pass
+
             md = MarketDashboard()
             md.load_data(indices=indices, sector_perf=sector_perf, top_movers=top_gainers, macro=macro, commodities=None, currencies=None, period_label=period)
             fig = md.create_figure()
-            return fig
+
+            # prepare raw cache pretty-print for debug
+            raw_pretty = json.dumps(cache or {}, indent=2, ensure_ascii=False)
+            if len(raw_pretty) > 50000:
+                raw_pretty = raw_pretty[:50000] + "\n\n...truncated..."
+            return fig, raw_pretty
         except Exception as e:
             logger.exception("Failed to update market overview")
-            return go.Figure()
+            return {}, "Error building figure"
 
     @app.callback(
-        Output('market-snapshot-output', 'children'),
-        Input('market-snapshot-btn', 'n_clicks'),
-        State('market-period-dropdown', 'value'),
+        Output('market-download', 'data'),
+        Input('market-download-btn', 'n_clicks'),
+        State('market-sector-filter', 'value'),
+        prevent_initial_call=True
     )
-    def snapshot_market(n_clicks, period):
+    def download_top_movers(n_clicks, sector_filter):
         """
-        Save an HTML snapshot of the market figure and return a download link.
-        Uses cached data to build the figure so snapshot is fast and deterministic.
+        Create a CSV of the current top movers (filtered by sector) and send it to the user.
         """
-        if not n_clicks:
-            return ""
         try:
             cache = _read_cache() or {}
-            indices = _reconstruct_indices(cache.get('indices'))
-            sector_perf = pd.DataFrame(cache.get('sector_perf', []))
-            top_gainers = pd.DataFrame(cache.get('top_gainers', []))
-            macro = cache.get('macro', {})
-
-            md = MarketDashboard()
-            md.load_data(indices=indices, sector_perf=sector_perf, top_movers=top_gainers, macro=macro, commodities=None, currencies=None, period_label=period)
-            fig = md.create_figure()
-
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"market_snapshot_{ts}.html"
-            path = os.path.join(SNAPSHOT_DIR, filename)
-            fig.write_html(path, include_plotlyjs="cdn")
-            link = html.A("Download snapshot", href=f"/{path}", target="_blank", className="btn btn-link")
-            return link
+            top = pd.DataFrame(cache.get('top_gainers', []))
+            if sector_filter and sector_filter != 'ALL' and not top.empty:
+                top = top[top['sector'] == sector_filter]
+            if top.empty:
+                # return a small CSV placeholder
+                csv = "symbol,perf,sector,volume\n"
+                return dcc.send_data_frame(lambda df: df.to_csv(index=False), pd.DataFrame(), filename=f"top_movers_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+            return dcc.send_data_frame(top.to_csv, filename=f"top_movers_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         except Exception:
-            logger.exception("Failed to create snapshot")
-            return html.Div("Snapshot failed", className="text-danger")
+            logger.exception("Failed to prepare top movers CSV")
+            return None
+
+    # Populate sector filter options from cache on interval (keep it fast)
+    @app.callback(
+        Output('market-sector-filter', 'options'),
+        Input('market-cache-raw', 'children'),
+    )
+    def populate_sector_filter(_raw):
+        try:
+            cache = _read_cache() or {}
+            sectors = set()
+            for t in cache.get('top_gainers', []) + cache.get('top_losers', []):
+                if isinstance(t, dict):
+                    s = t.get('sector')
+                    if s:
+                        sectors.add(s)
+            options = [{'label': 'All', 'value': 'ALL'}] + [{'label': s, 'value': s} for s in sorted(sectors)]
+            return options
+        except Exception:
+            return [{'label': 'All', 'value': 'ALL'}]

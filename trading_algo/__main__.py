@@ -10,6 +10,16 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 
+# Add near top of file, before other imports that rely on env
+from pathlib import Path
+try:
+    from dotenv import load_dotenv
+    # project root = parent of trading_algo package dir
+    root = Path(__file__).resolve().parent.parent
+    load_dotenv(root / ".env")
+except Exception:
+    # python-dotenv not installed or no .env found: continue, rely on real env
+    pass
 # Centralized logging initialization for CLI entrypoint
 from trading_algo.logging_config import init_logging
 

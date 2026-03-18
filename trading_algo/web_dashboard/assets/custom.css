@@ -1,0 +1,23 @@
+﻿/* python trading_algo/web_dashboard/assets/custom.css */
+/* Ensure market summary cards are visible and not overlapped */
+.market-card {
+    display: inline-block;
+    vertical-align: top;
+    margin: 6px;
+    z-index: 10;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    border-radius: 4px;
+}
+
+/* Prevent plotly overlay hiding cards */
+.container-fluid .row > .card {
+    overflow: visible;
+}
+
+/* Small responsive tweaks */
+@media (max-width: 768px) {
+    .market-card {
+        min-width: 120px;
+        font-size: 0.9rem;
+    }
+}

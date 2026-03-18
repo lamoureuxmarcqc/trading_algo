@@ -22,6 +22,11 @@ def create_sample_data():
     np.random.seed(42)
     returns = np.random.normal(0.001, 0.02, 100)
     prices = 100 * np.exp(np.cumsum(returns))
+    # Make prices a pandas Series so .rolling() is available
+    prices = pd.Series(prices, index=dates)
+    
+    # Volume series for rolling
+    volumes = pd.Series(np.random.randint(1000000, 5000000, 100), index=dates)
     
     # Créer un DataFrame avec des colonnes OHLCV
     df = pd.DataFrame({
@@ -29,20 +34,20 @@ def create_sample_data():
         'High': prices * 1.02,
         'Low': prices * 0.98,
         'Close': prices,
-        'Volume': np.random.randint(1000000, 5000000, 100),
-        'RSI': np.random.uniform(30, 70, 100),
-        'MACD': np.random.uniform(-2, 2, 100),
-        'MACD_Signal': np.random.uniform(-2, 2, 100),
-        'MACD_Histogram': np.random.uniform(-1, 1, 100),
-        'ATR': np.random.uniform(1, 5, 100),
+        'Volume': volumes,
+        'RSI': pd.Series(np.random.uniform(30, 70, 100), index=dates),
+        'MACD': pd.Series(np.random.uniform(-2, 2, 100), index=dates),
+        'MACD_Signal': pd.Series(np.random.uniform(-2, 2, 100), index=dates),
+        'MACD_Histogram': pd.Series(np.random.uniform(-1, 1, 100), index=dates),
+        'ATR': pd.Series(np.random.uniform(1, 5, 100), index=dates),
         'SMA_20': prices.rolling(20).mean(),
         'SMA_50': prices.rolling(50).mean(),
         'SMA_200': prices.rolling(200).mean(),
         'BB_Upper': prices.rolling(20).mean() + (prices.rolling(20).std() * 2),
         'BB_Lower': prices.rolling(20).mean() - (prices.rolling(20).std() * 2),
         'BB_Middle': prices.rolling(20).mean(),
-        'Volume_SMA': np.random.randint(1000000, 5000000, 100).rolling(20).mean(),
-        'Volume_Ratio': np.random.uniform(0.5, 2, 100)
+        'Volume_SMA': volumes.rolling(20).mean(),
+        'Volume_Ratio': pd.Series(np.random.uniform(0.5, 2, 100), index=dates)
     }, index=dates)
     
     return df

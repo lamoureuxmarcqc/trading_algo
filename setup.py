@@ -21,7 +21,9 @@ setup(
         "openpyxl>=3.1.3",
         "dash>=2.14.0,<3.0.0",          # Version stable 2.x
         "dash-bootstrap-components>=1.0.0,<2.0.0",
-        "dash-cytoscape>=1.0.0,<2.0.0"   # Si vous l'utilisez
+        "dash-cytoscape>=1.0.0,<2.0.0",   # Si vous l'utilisez
+        "apscheduler>=1.0.0",
+        "redis>=1.0.0"
     ],
     python_requires=">=3.8",
     extras_require={

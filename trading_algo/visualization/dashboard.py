@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import settings
+from trading_algo import settings
 from plotly.subplots import make_subplots
 
 # Constants
@@ -153,6 +153,32 @@ class TradingDashboard:
         last_price = df['Close'].iloc[-1]
         fig.add_hline(y=last_price, line_dash="dot", line_color="blue", opacity=0.5,
                       annotation_text=f"Actuel: ${last_price:.2f}", annotation_position="bottom right", row=row, col=col)
+        # If a trading signal column is present, plot buy/sell markers
+        # Expectation: 'Signal' column with values {1: buy, -1: sell, 0/NaN: none}
+        try:
+            if 'Signal' in df.columns:
+                buys = df[df['Signal'] == 1]['Close']
+                sells = df[df['Signal'] == -1]['Close']
+                if not buys.empty:
+                    fig.add_trace(go.Scattergl(
+                        x=buys.index,
+                        y=buys.values,
+                        mode='markers',
+                        marker=dict(symbol='triangle-up', color='green', size=10),
+                        name='Signal Achat',
+                        hovertemplate='Achat %{y:.2f}<br>%{x|%d %b %Y}<extra></extra>'
+                    ), row=row, col=col)
+                if not sells.empty:
+                    fig.add_trace(go.Scattergl(
+                        x=sells.index,
+                        y=sells.values,
+                        mode='markers',
+                        marker=dict(symbol='triangle-down', color='red', size=10),
+                        name='Signal Vente',
+                        hovertemplate='Vente %{y:.2f}<br>%{x|%d %b %Y}<extra></extra>'
+                    ), row=row, col=col)
+        except Exception as e:
+            self.logger.debug(f"Failed to add signal markers: {e}")
 
     def _add_trading_score_gauge(self, fig, row: int, col: int):
         fig.add_trace(

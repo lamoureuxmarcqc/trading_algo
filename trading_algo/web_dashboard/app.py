@@ -32,7 +32,7 @@ from trading_algo.callbacks.market_callbacks import register_market_callbacks
 # Data helpers
 from trading_algo.data.data_extraction import StockDataExtractor, MacroDataExtractor
 from trading_algo.screening.actions_sp500 import get_sp500_symbols
-import settings
+from trading_algo import settings
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +94,11 @@ app.layout = html.Div(
             # Tabs for Portfolio / Symbol analysis and embedded dashboards
             dcc.Tabs(
                 id="main-tabs",
-                value="tab-portfolio",
+                value="tab-portfolio",  # change default if you want market shown by default
                 children=[
                     dcc.Tab(label="Portefeuille global", value="tab-portfolio"),
                     dcc.Tab(label="Analyse par symbole", value="tab-symbol"),
-                    dcc.Tab(label="Vue: Indicateurs & Risques", value="tab-market")
+                    dcc.Tab(label="Vue: Indicateurs & Risques", value="tab-market"),  # <-- Market tab
                 ],
             ),
             html.Div(id="tab-content", className="mt-3"),
@@ -130,8 +130,9 @@ def render_tab(tab):
     if tab == "tab-symbol":
         return symbol_layout()
     if tab == "tab-market":
-        # use the dedicated market layout
+        # return the market layout that contains the Graph and debug area
         return market_layout()
+    return html.Div()  # safe fallback
 
 
 # Background refresh job: compute sector_perf and top_movers and write JSON cache
@@ -271,3 +272,133 @@ if __name__ == "__main__":
     # Use debug mode controlled by env var for deployment safety
     debug_flag = os.getenv("DASH_DEBUG", "False").lower() in ("1", "true", "yes")
     app.run_server(debug=debug_flag, port=int(os.getenv("PORT", 8050)), host="0.0.0.0")
+
+# --- new: header + market cards updater with cache-age and optional Redis ---
+import json
+import os
+import datetime
+import time
+from dash import html
+
+try:
+    import redis
+except Exception:
+    redis = None
+
+def _read_market_cache_from_redis(redis_url: str):
+    try:
+        if redis is None:
+            return None
+        r = redis.from_url(redis_url)
+        raw = r.get("market_overview")
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception:
+        return None
+
+def _read_market_cache_from_file(path: str):
+    try:
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+@app.callback(
+    Output("header-last-update", "children"),
+    Output("market-summary", "children"),
+    Input("market-cache-check-interval", "n_intervals"),
+)
+def update_header_and_cards_from_cache(n_intervals):
+    """
+    Update header timestamp + top cards from cache.
+    Uses Redis if REDIS_URL env var is set (recommended for multi-worker deployments),
+    otherwise reads the file at settings.MARKET_CACHE_FILE.
+    Also computes cache age in seconds and shows it in the header.
+    """
+    # Try Redis first if configured
+    redis_url = os.getenv("REDIS_URL") or os.getenv("REDIS_URI")
+    cache = None
+    if redis_url:
+        cache = _read_market_cache_from_redis(redis_url)
+    # fallback to file
+    if cache is None:
+        cache_path = getattr(settings, "MARKET_CACHE_FILE", os.path.join(os.getcwd(), "cache", "market_overview.json"))
+        cache = _read_market_cache_from_file(cache_path)
+
+    # default UI when no cache
+    if not cache:
+        return "Dernière mise à jour: -- (cache absent)", [html.Div("Market data unavailable", className="text-muted")]
+
+    # timestamp handling
+    ts = cache.get("timestamp") or cache.get("timestamp_utc") or cache.get("timestamp_iso")
+    age_s = None
+    last_str = "--"
+    if ts:
+        try:
+            # accept ISO or epoch
+            if isinstance(ts, (int, float)):
+                dt = datetime.datetime.fromtimestamp(float(ts), tz=datetime.timezone.utc)
+            else:
+                dt = datetime.datetime.fromisoformat(str(ts))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=datetime.timezone.utc)
+            now = datetime.datetime.now(datetime.timezone.utc)
+            age_s = int((now - dt).total_seconds())
+            # pretty local time
+            last_str = dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+        except Exception:
+            last_str = str(ts)
+
+    age_display = f"{age_s}s" if age_s is not None else "n/a"
+    header_text = f"Dernière mise à jour: {last_str} — cache age: {age_display}"
+
+    # build cards from cached indices if possible
+    cards = []
+    indices = cache.get("indices", {}) or {}
+    display_map = {
+        "^GSPC": "S&P 500",
+        "^IXIC": "NASDAQ",
+        "^DJI": "Dow Jones",
+        "^FTSE": "FTSE",
+        "^GDAXI": "DAX",
+        "^GSPTSE": "TSX"
+    }
+    for sym, friendly in display_map.items():
+        d = indices.get(sym)
+        if not d:
+            continue
+        closes = d.get("closes", []) or []
+        if not closes:
+            continue
+        last_price = closes[-1]
+        change = None
+        if len(closes) >= 2 and closes[-2] != 0:
+            change = (closes[-1] - closes[-2]) / closes[-2] * 100.0
+        color = "success" if (change is not None and change > 0) else "danger" if (change is not None and change < 0) else "secondary"
+        card = html.Div(
+            className="card p-2 market-card",
+            style={"minWidth": "150px", "marginRight": "8px"},
+            children=[
+                html.Div(friendly, className="text-muted small"),
+                html.Div(f"{last_price:,.2f}", className=f"h5 text-{color}"),
+                html.Div(f"{change:+.2f}%" if change is not None else "", className="small"),
+            ],
+        )
+        cards.append(card)
+
+    if not cards:
+        cards = [html.Div("Market snapshot available (open Market tab)", className="text-muted")]
+
+    return header_text, cards
+
+# optional: write to Redis too if REDIS_URL set
+redis_url = os.getenv("REDIS_URL") or os.getenv("REDIS_URI")
+if redis_url and redis is not None:
+    try:
+        r = redis.from_url(redis_url)
+        r.set("market_overview", json.dumps(payload), ex=getattr(settings, "MARKET_CACHE_TTL", 1800))
+    except Exception:
+        logger.exception("Failed to write market cache to Redis")
