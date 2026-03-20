@@ -111,20 +111,69 @@ def register_market_callbacks(app):
     )
     def download_top_movers(n_clicks, sector_filter):
         """
-        Create a CSV of the current top movers (filtered by sector) and send it to the user.
+        Create an Excel workbook with multiple sheets (indices, sector_perf, top_gainers, top_losers, macro).
+        The function writes into the provided buffer via dcc.send_bytes.
         """
         try:
             cache = _read_cache() or {}
+            # rebuild small DataFrames
             top = pd.DataFrame(cache.get('top_gainers', []))
+            losers = pd.DataFrame(cache.get('top_losers', []))
+            sector_df = pd.DataFrame(cache.get('sector_perf', []))
+            macro = cache.get('macro', {})
+
+            # apply sector filter if requested
             if sector_filter and sector_filter != 'ALL' and not top.empty:
                 top = top[top['sector'] == sector_filter]
-            if top.empty:
-                # return a small CSV placeholder
-                csv = "symbol,perf,sector,volume\n"
-                return dcc.send_data_frame(lambda df: df.to_csv(index=False), pd.DataFrame(), filename=f"top_movers_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-            return dcc.send_data_frame(top.to_csv, filename=f"top_movers_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+
+            # indices sheet: reconstruct indices dict -> DataFrame (one sheet per index)
+            indices_cache = cache.get('indices', {}) or {}
+
+            import io
+            def _to_excel_bytes(buffer):
+                # buffer is a file-like object provided by Dash
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    # Top movers
+                    if not top.empty:
+                        top.to_excel(writer, sheet_name='Top Gainers', index=False)
+                    else:
+                        pd.DataFrame(columns=['symbol','perf','sector','volume']).to_excel(writer, sheet_name='Top Gainers', index=False)
+                    # Top losers
+                    if not losers.empty:
+                        losers.to_excel(writer, sheet_name='Top Losers', index=False)
+                    # Sector perf
+                    if not sector_df.empty:
+                        sector_df.to_excel(writer, sheet_name='Sector Perf', index=False)
+                    # Macro: write as key/value
+                    if isinstance(macro, dict) and macro:
+                        macro_items = []
+                        for k, v in macro.items():
+                            macro_items.append({'indicator': k, 'value': str(v)})
+                        pd.DataFrame(macro_items).to_excel(writer, sheet_name='Macro', index=False)
+                    # Indices: each index as its own sheet (or a combined sheet)
+                    for sym, idx in indices_cache.items():
+                        try:
+                            # ensure safe sheet name
+                            sheet_name = str(sym)[:31]
+                            df_idx = None
+                            dates = idx.get('dates', [])
+                            closes = idx.get('closes', [])
+                            if len(dates) == len(closes) and dates:
+                                df_idx = pd.DataFrame({'Date': dates, 'Close': closes})
+                            elif closes:
+                                df_idx = pd.DataFrame({'Close': closes})
+                            if df_idx is not None:
+                                df_idx.to_excel(writer, sheet_name=f"Idx_{sheet_name}", index=False)
+                        except Exception:
+                            # ignore per-index failure
+                            logger.debug(f"Failed writing index sheet for {sym}")
+                # writer.close() implicitly called
+
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"market_export_{ts}.xlsx"
+            return dcc.send_bytes(_to_excel_bytes, filename=filename)
         except Exception:
-            logger.exception("Failed to prepare top movers CSV")
+            logger.exception("Failed to prepare top movers Excel export")
             return None
 
     # Populate sector filter options from cache on interval (keep it fast)

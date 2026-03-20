@@ -149,12 +149,14 @@ def _safe_dump_cache(payload: dict):
 def refresh_market_cache():
     """
     Fetch a lightweight market snapshot and persist to disk. This runs in background.
-    Best-effort: limits number of symbols fetched to avoid overloading yfinance.
+    Also compute simple SMA crossover trading signals for sampled symbols and
+    optionally write the payload to Redis (if REDIS_URL is set).
     """
     try:
         logger.info("Market cache refresh started")
         extractor = StockDataExtractor()
         macro = MacroDataExtractor().get_all_macro_data()
+
         # basic indices snapshot
         indices = {}
         for symbol in ['^GSPC', '^IXIC', '^DJI', '^FTSE', '^GDAXI', '^GSPTSE']:
@@ -162,7 +164,6 @@ def refresh_market_cache():
                 df = extractor.get_historical_data(symbol=symbol, period='3mo', interval='1d')
                 if isinstance(df, dict) or df is None:
                     continue
-                # keep only last 60 points as simple arrays to serialize
                 closes = df['Close'].dropna().iloc[-60:].tolist()
                 dates = [str(d.date()) for d in df.index[-60:]]
                 indices[symbol] = {'dates': dates, 'closes': closes}
@@ -170,6 +171,11 @@ def refresh_market_cache():
                 logger.debug(f"index fetch error {symbol}: {e}")
 
         # Sector perf & top movers: sample S&P500 (or fallback) and compute 1M perf
+        top_gainers = []
+        top_losers = []
+        sector_perf = []
+        symbol_signals = {}  # mapping symbol -> {'last_signal': int, 'signals': [{'date':..., 'signal':...}, ...]}
+
         try:
             symbols = []
             try:
@@ -189,20 +195,49 @@ def refresh_market_cache():
                     closes = df['Close'].dropna()
                     if len(closes) < 2:
                         continue
+
+                    # compute 1M perf
                     perf = (float(closes.iloc[-1]) - float(closes.iloc[0])) / float(closes.iloc[0]) * 100.0
+
                     # attempt to get sector from overview
                     try:
                         overview = extractor.get_fundamental_data_fallback(s)
                         sector = overview.get('profile', {}).get('sector') or "Unknown"
                     except Exception:
                         sector = "Unknown"
-                    perf_list.append({'symbol': s, 'perf': perf, 'sector': sector})
-                    # accumulate per-sector
+
+                    perf_entry = {'symbol': s, 'perf': perf, 'sector': sector}
+                    perf_list.append(perf_entry)
                     sector_map.setdefault(sector, []).append(perf)
+
+                    # --- Compute simple SMA crossover signals ---
+                    try:
+                        close_series = df['Close'].dropna()
+                        sma20 = close_series.rolling(20, min_periods=1).mean()
+                        sma50 = close_series.rolling(50, min_periods=1).mean()
+
+                        # detect crossovers: buy when sma20 > sma50 and previous sma20 <= sma50
+                        signals = []
+                        prev_state = None
+                        for idx in range(1, len(close_series)):
+                            cur = sma20.iloc[idx] > sma50.iloc[idx]
+                            prev = sma20.iloc[idx - 1] > sma50.iloc[idx - 1]
+                            if cur and not prev:
+                                signals.append({'date': str(close_series.index[idx].date()), 'signal': 1})
+                            elif not cur and prev:
+                                signals.append({'date': str(close_series.index[idx].date()), 'signal': -1})
+                        last_signal = signals[-1]['signal'] if signals else 0
+                        symbol_signals[s] = {'last_signal': int(last_signal), 'signals': signals}
+                    except Exception as e:
+                        # non-critical
+                        symbol_signals[s] = {'last_signal': 0, 'signals': []}
+                        logger.debug(f"Signal computation failed for {s}: {e}")
+
                 except Exception as e:
                     logger.debug(f"symbol sample error {s}: {e}")
                 # small pause to be nice to remote endpoints
-                time.sleep(0.05)
+                time.sleep(0.03)
+
             # top movers: sort by perf
             top_sorted = sorted(perf_list, key=lambda x: x['perf'], reverse=True)
             top_gainers = top_sorted[:10]
@@ -220,9 +255,29 @@ def refresh_market_cache():
             "sector_perf": sector_perf,
             "top_gainers": top_gainers,
             "top_losers": top_losers,
+            "symbol_signals": symbol_signals,
             "macro": macro
         }
+
+        # persist to file
         _safe_dump_cache(payload)
+
+        # also write to Redis if configured (for multi-worker setups)
+        try:
+            redis_url = os.getenv("REDIS_URL") or os.getenv("REDIS_URI")
+            if redis_url:
+                try:
+                    import redis as _redis
+                    r = _redis.from_url(redis_url)
+                    ttl = getattr(settings, "MARKET_CACHE_TTL", 1800)
+                    r.set("market_overview", json.dumps(payload), ex=int(ttl))
+                    logger.debug("Market cache written to Redis")
+                except Exception as e:
+                    logger.exception(f"Failed writing market cache to Redis: {e}")
+        except Exception:
+            # ignore redis errors
+            pass
+
         logger.info("Market cache refresh completed")
     except Exception as e:
         logger.exception(f"Market refresh job failed: {e}")

@@ -953,87 +953,79 @@ class StockModelTrain:
                 for Xb, yb in StockModelTrain._sequence_batch_generator_from_arrays(X_scaled, y_scaled, lookback_days, batch_size):
                     yield Xb, yb
 
+
     def train_with_generator(self,
                              data_gen,
                              steps_per_epoch: int,
-                             validation_gen: Optional[Any] = None,
-                             validation_steps: Optional[int] = None,
+                             validation_gen=None,
+                             validation_steps=None,
                              epochs: int = 50,
                              batch_size: int = 32,
                              model_dir: Optional[str] = None,
-                             additional_callbacks: Optional[List[Any]] = None):
+                             additional_callbacks: Optional[List[Any]] = None,
+                             model_config: Optional[Dict[str, Any]] = None,
+                             use_checkpoint: bool = True):
         """
-        Train from a Python generator (streaming). Keeps the same saving/callback behaviour as train().
-        data_gen: generator yielding (X_batch, y_batch)
-        steps_per_epoch: number of batches per epoch
-        validation_gen/validation_steps: optional validation generator + steps
+        Entraîne le modèle à partir d'un générateur Python (streaming).
+    
+        Paramètres supplémentaires :
+            use_checkpoint : bool, par défaut True. Active la sauvegarde du meilleur modèle.
         """
         try:
-            # Build callbacks consistent with existing train()
-            cbs = additional_callbacks[:] if additional_callbacks else []
-            cbs += [
-                tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=self.patience_early_stopping, restore_best_weights=True),
-                tf.keras.callbacks.ReduceLROnPlateau(monitor="val_loss", patience=max(3, self.patience_early_stopping // 4), factor=0.2)
-            ]
+            self._check_gpu()
+            n_features, n_outputs = self._infer_dims_from_generator(data_gen)
+            if n_features is None or n_outputs is None:
+                raise RuntimeError("Impossible de déterminer les dimensions.")
 
-            # Determine output dimension from target_scaler if available
-            # Otherwise infer from first batch pulled from generator (peek)
-            try:
-                # peek first batch
-                import itertools
-                first = next(itertools.islice(data_gen, 0, 1), None)
-                # If we got a batch, we need to create a new generator wrapper since we consumed one
-            except Exception:
-                first = None
+            # Construction du modèle
+            default_config = {
+                'lstm_units1': 64, 'lstm_units2': 32, 'lstm_units3': 16,
+                'dense_units': 64, 'dropout_rate': 0.3, 'recurrent_dropout': 0.2,
+                'l2_reg': 0.001, 'n_outputs': n_outputs
+            }
+            if model_config:
+                default_config.update(model_config)
+            default_config['n_outputs'] = n_outputs
 
-            # NOTE: For safety, the caller should supply a fresh generator (or a callable that returns one).
-            # If data_gen is a callable returning generator, use it to obtain fresh generators for fit and validation.
-            if callable(data_gen):
-                train_gen = data_gen()
-            else:
-                train_gen = data_gen
-
-            val_gen = None
-            if validation_gen:
-                val_gen = validation_gen() if callable(validation_gen) else validation_gen
-
-            # Build model architecture (use same conventions as train())
-            # We need n_features and n_outputs: infer from a small batch if possible
-            sample_X, sample_y = None, None
-            # attempt to peek safely
-            try:
-                sample_X, sample_y = next(train_gen)
-            except Exception:
-                # If generator can't be peeked, raise
-                logger.error("train_with_generator: unable to fetch sample batch from generator for shape inference")
-                raise RuntimeError("Generator must yield at least one batch for shape inference")
-
-            # Create a wrapper generator for training that will re-yield sample then continue with original stream
-            def _prepend_sample_and_forward(sample, gen):
-                # first yield sample, then forward the rest
-                yielded = False
-                if sample is not None:
-                    yield sample
-                    yielded = True
-                for batch in gen:
-                    yield batch
-
-            # Wrap train_gen with sample re-inserted
-            train_gen = _prepend_sample_and_forward((sample_X.astype(np.float32), sample_y.astype(np.float32)), train_gen)
-
-            n_features = int(sample_X.shape[2])
-            n_outputs = int(sample_y.shape[1])
-
-            # Build model
-            model = ImprovedLSTMPredictorMultiOutput(
-                lstm_units1=64, lstm_units2=32, lstm_units3=16,
-                dense_units=64, dropout_rate=0.3, recurrent_dropout=0.2,
-                l2_reg=0.001, n_outputs=n_outputs
-            )
+            model = ImprovedLSTMPredictorMultiOutput(**default_config)
             optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
             model.compile(optimizer=optimizer, loss="huber", metrics=["mae", "mse"])
 
-            # Fit
+            # Callbacks
+            cbs = additional_callbacks[:] if additional_callbacks else []
+            if use_checkpoint:
+                if model_dir is None:
+                    model_dir = f"models_saved/{self.symbol or 'batch'}"
+                os.makedirs(model_dir, exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                checkpoint_path = os.path.join(model_dir, f"best_model_{ts}.keras")
+                cbs.append(
+                    tf.keras.callbacks.ModelCheckpoint(
+                        filepath=checkpoint_path,
+                        monitor='val_loss',
+                        save_best_only=True,
+                        mode='min',
+                        verbose=1
+                    )
+                )
+
+            cbs.extend([
+                tf.keras.callbacks.EarlyStopping(
+                    monitor="val_loss",
+                    patience=self.patience_early_stopping,
+                    restore_best_weights=True
+                ),
+                tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor="val_loss",
+                    patience=max(3, self.patience_early_stopping // 4),
+                    factor=0.2
+                )
+            ])
+
+            # Gestion générateurs
+            train_gen = data_gen() if callable(data_gen) else data_gen
+            val_gen = validation_gen() if callable(validation_gen) else validation_gen
+
             history = model.fit(
                 train_gen,
                 steps_per_epoch=steps_per_epoch,
@@ -1044,29 +1036,29 @@ class StockModelTrain:
                 verbose=1
             )
 
-            # assign and save
+            # Sauvegarde finale (optionnelle)
             self.model = model
             if model_dir is None:
                 model_dir = f"models_saved/{self.symbol or 'batch'}"
             os.makedirs(model_dir, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            model_path = os.path.join(model_dir, f"model_{ts}.keras")
-            model.save(model_path)
+            final_path = os.path.join(model_dir, f"model_final_{ts}.keras")
+            model.save(final_path)
 
-            # save scalers if present
+            # Sauvegarde des scalers si présents
             try:
                 with open(os.path.join(model_dir, f"feature_scaler_{ts}.pkl"), "wb") as f:
                     pickle.dump(self.feature_scaler, f)
                 with open(os.path.join(model_dir, f"target_scaler_{ts}.pkl"), "wb") as f:
                     pickle.dump(self.target_scaler, f)
-            except Exception:
-                logger.debug("Could not save scalers")
+            except Exception as e:
+                logger.debug(f"Impossible de sauvegarder les scalers : {e}")
 
-            logger.info(f"Model trained and saved: {model_path}")
+            logger.info(f"Modèle entraîné. Meilleur modèle : {checkpoint_path if use_checkpoint else 'non sauvegardé'}")
             return history
 
         except Exception as e:
-            logger.error(f"Error train_with_generator: {e}", exc_info=True)
+            logger.error(f"Erreur dans train_with_generator : {e}", exc_info=True)
             raise
 
 def main():
