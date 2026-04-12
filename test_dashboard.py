@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 # Ajouter le répertoire src au chemin
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from trading_algo.visualization.dashboard import TradingDashboard, MiniDashboard
+from trading_algo.visualization.symbol_dashboard import AdvancedTradingDashboard, MiniDashboard
 
 def create_sample_data():
     """Crée des données d'exemple pour tester le dashboard"""
@@ -54,14 +54,14 @@ def create_sample_data():
 
 def test_trading_dashboard():
     """Test du dashboard principal"""
-    print("🧪 Test du TradingDashboard")
+    print("🧪 Test du AdvancedTradingDashboard")
     print("=" * 50)
     
     symbol = "AAPL"
     current_price = 175.50
     
     # Créer le dashboard
-    dashboard = TradingDashboard(symbol, current_price)
+    dashboard = AdvancedTradingDashboard(symbol, current_price)
     
     # Créer des données d'exemple
     technical_data = create_sample_data()
@@ -186,7 +186,7 @@ def test_comparison_dashboard():
         data_dict[symbol] = create_sample_data()
     
     # Importer la fonction
-    from trading_algo.visualization.dashboard import create_comparison_dashboard
+    from trading_algo.visualization.symbol_dashboard import create_comparison_dashboard
     
     # Créer le dashboard de comparaison
     fig = create_comparison_dashboard(symbols, data_dict)

@@ -12,11 +12,20 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple, List
+from dotenv import load_dotenv
+load_dotenv()  # Charge les variables du fichier .env dans os.environ
 
 logger = logging.getLogger(__name__)
 
+DEBUG = True
+WEB_HOST = "127.0.0.1"
+WEB_PORT = 8050
+MARKET_CACHE_FILE = os.path.join(os.getcwd(), "cache", "market_overview.json")
 # Try to import project-level settings.py (top-level) first.
 _root_settings = None
+DISPLAY_MAP = {"^GSPC": "S&P 500", "^IXIC": "NASDAQ", "^DJI": "Dow Jones",
+        "^GSPTSE": "TSX", "^VIX": "VIX", "GC=F": "OR",
+        "CADUSD=X": "CAD/USD", "BTC-USD": "BTC"}
 try:
     _root_settings = importlib.import_module("settings")
     logger.debug("Using top-level settings module")
@@ -39,9 +48,11 @@ class APIConfig:
     polygon: Optional[str] = None
     twitter: Optional[str] = None
     nytimes: Optional[str] = None
+    fred: Optional[str] = None  # Ajout FRED
 
     @classmethod
     def from_env_or_root(cls) -> "APIConfig":
+
         if _root_settings and hasattr(_root_settings, "APIConfig"):
             try:
                 root_cfg = getattr(_root_settings, "APIConfig")
@@ -55,6 +66,7 @@ class APIConfig:
             polygon=os.getenv("POLYGON_API_KEY"),
             twitter=os.getenv("TWITTER_X_BEARER"),
             nytimes=os.getenv("NY_TIMES_API_KEY"),
+            fred=os.getenv("FRED_API_KEY"), # Correspond au .env
         )
 
 
@@ -76,7 +88,7 @@ VAR_LABELS: List[str] = _get(
 )
 
 # Market cache / scheduler defaults
-MARKET_REFRESH_INTERVAL_MIN: int = int(_get("MARKET_REFRESH_INTERVAL_MIN", 10))
+MARKET_REFRESH_INTERVAL_MIN: int = int(_get("MARKET_REFRESH_INTERVAL_MIN", 5))
 MARKET_SAMPLE_SYMBOLS: int = int(_get("MARKET_SAMPLE_SYMBOLS", 120))
 MARKET_CACHE_FILE: str = _get("MARKET_CACHE_FILE", os.path.join(os.getcwd(), "cache", "market_overview.json"))
 MARKET_CACHE_TTL: int = int(_get("MARKET_CACHE_TTL", 60 * 30))

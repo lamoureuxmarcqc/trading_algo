@@ -9,7 +9,7 @@ import os
 # Ajouter src au chemin Python
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from trading_algo.main import main
+from trading_algo import main
 
 if __name__ == "__main__":
     main()

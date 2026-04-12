@@ -6,51 +6,37 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# Use central settings where applicable
 from trading_algo import settings
 
 logger = logging.getLogger(__name__)
 
 
 class AdvancedTradingDashboard:
-    """
-    Single, stable AdvancedTradingDashboard for UI visualization.
-    API:
-      - AdvancedTradingDashboard(symbol)
-      - load_data(technical_data, predictions_df=None, risk_metrics=None, overview=None, macro=None)
-      - create_mini_dashboard()
-      - create_comparison_dashboard(...)
-      - create_full_dashboard()
-    """
+    """Dashboard consolidé : mini-views, gauges, summary table and full dashboard figure."""
 
     def __init__(self, symbol: str = "ASSET"):
-        self.symbol = (symbol or "ASSET").upper()
+        self.symbol = symbol.upper()
         self.logger = logging.getLogger(__name__)
         self.risk_metrics: Dict[str, Any] = {}
         self.technical_data: Optional[pd.DataFrame] = None
         self.predictions_df: Optional[pd.DataFrame] = None
-        self.overview: Dict[str, Any] = {}
-        self.macro: Dict[str, Any] = {}
         self.recommendation: str = "NEUTRE"
         self.score: float = 5.0
-        self.current_price: float = 0.0
 
     def load_data(
         self,
         technical_data: Optional[pd.DataFrame] = None,
         predictions_df: Optional[pd.DataFrame] = None,
         risk_metrics: Optional[Dict[str, Any]] = None,
-        overview: Optional[Dict[str, Any]] = None,
-        macro: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Inject data used to build the dashboard (tolerant to None)."""
+        """Injecte les données avant génération du dashboard."""
         self.technical_data = technical_data.copy() if technical_data is not None else pd.DataFrame()
         self.predictions_df = predictions_df.copy() if predictions_df is not None else pd.DataFrame()
         self.risk_metrics = risk_metrics or {}
-        self.overview = overview or {}
-        self.macro = macro or {}
-
         if self.technical_data is not None and not self.technical_data.empty:
             try:
+                # set current price if available
                 self.current_price = float(self.technical_data["Close"].iloc[-1])
             except Exception:
                 self.current_price = 0.0
@@ -58,6 +44,7 @@ class AdvancedTradingDashboard:
     # --- MINI & COMPARISON VIEWS ---
 
     def create_mini_dashboard(self) -> go.Figure:
+        """Compact quick-view showing price and optional IA predictions."""
         data = self.technical_data
         preds = self.predictions_df
         if data is None or data.empty:
@@ -70,6 +57,7 @@ class AdvancedTradingDashboard:
         )
 
         if preds is not None and not preds.empty:
+            # Expect predictions_df indexed by date and column 'Predicted_Close' or similar
             pred_col = "Predicted_Close" if "Predicted_Close" in preds.columns else preds.columns[0]
             fig.add_trace(
                 go.Scattergl(x=preds.index, y=preds[pred_col], mode="lines+markers", name="IA",
@@ -81,6 +69,7 @@ class AdvancedTradingDashboard:
 
     @staticmethod
     def create_comparison_dashboard(symbols: List[str], data_dict: Dict[str, pd.DataFrame]) -> go.Figure:
+        """Compare multiple symbols (base 100 performance, ATR, RSI)."""
         fig = make_subplots(
             rows=2, cols=2,
             subplot_titles=("Performance Rel.", "Volatilité (ATR)", "RSI", "Volume Norm."),
@@ -180,7 +169,9 @@ class AdvancedTradingDashboard:
     # --- FULL DASHBOARD CREATION ---
 
     def create_full_dashboard(self) -> go.Figure:
+        """Construit et renvoie la figure complète (prix, gauges, table)."""
         data = self.technical_data
+        risk = self.risk_metrics or {}
         if data is None or data.empty:
             return self._create_empty_fig("Données historiques indisponibles")
 
@@ -192,7 +183,7 @@ class AdvancedTradingDashboard:
             subplot_titles=(f"Analyse {self.symbol}", "Sharpe Ratio", "VaR (95%)", "Synthèse Risque"),
         )
 
-        # Price series
+        # Price trace (main)
         fig.add_trace(go.Scatter(x=data.index, y=data["Close"], name="Prix", line=dict(color="#1f77b4")), row=1, col=1)
 
         # Gauges
@@ -204,6 +195,12 @@ class AdvancedTradingDashboard:
 
         fig.update_layout(height=1200, template="plotly_white", showlegend=False)
         return fig
+
+    # alias for compatibility
+    def create_dashboard(self) -> go.Figure:
+        return self.create_full_dashboard()
+
+    # --- UTILS ---
 
     def _create_empty_fig(self, message: str) -> go.Figure:
         fig = go.Figure()

@@ -1,141 +1,142 @@
-# python trading_algo/visualization/market_dashboard.py
-"""
-Market-level dashboard helper returning a Plotly figure summarizing global market state.
-Place this file at trading_algo/visualization/market_dashboard.py
-"""
 from __future__ import annotations
 import logging
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
-
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from trading_algo.data.data_extraction import StockDataExtractor, MacroDataExtractor
-
 logger = logging.getLogger(__name__)
 
-
 class MarketDashboard:
-    """
-    Builds a consolidated market overview figure.
-    Usage:
-      md = MarketDashboard()
-      md.load_data(...)          # supply dicts / DataFrames from your extractors
-      fig = md.create_figure()
-    """
     def __init__(self):
         self.indices: Dict[str, pd.DataFrame] = {}
-        self.sector_perf: Optional[pd.DataFrame] = None
-        self.top_movers: Optional[pd.DataFrame] = None
-        self.macro: Dict[str, Any] = {}
+        self.sector_perf: pd.DataFrame = pd.DataFrame()
+        self.top_movers: pd.DataFrame = pd.DataFrame()
         self.commodities: Dict[str, Any] = {}
         self.currencies: Dict[str, Any] = {}
+        self.macro: Dict[str, Any] = {}
         self.period_label = "1M"
-        self.logger = logging.getLogger(__name__)
 
-    def load_data(self,
-                  indices: Dict[str, pd.DataFrame] = None,
-                  sector_perf: pd.DataFrame = None,
-                  top_movers: pd.DataFrame = None,
-                  macro: Dict[str, Any] = None,
-                  commodities: Dict[str, Any] = None,
-                  currencies: Dict[str, Any] = None,
-                  period_label: str = "1M"):
-        """Load pre-fetched dataframes/dicts (fetching lives in data_extraction or scheduled job)."""
-        self.indices = indices or {}
-        self.sector_perf = sector_perf
-        self.top_movers = top_movers
-        self.macro = macro or {}
-        self.commodities = commodities or {}
-        self.currencies = currencies or {}
-        self.period_label = period_label
-        self.logger.info("Market data loaded for dashboard")
+    def load_data(self, **kwargs):
+        """Charge les données et gère les valeurs par défaut."""
+        self.indices = kwargs.get('indices', {})
+        self.sector_perf = kwargs.get('sector_perf', pd.DataFrame())
+        self.top_movers = kwargs.get('top_movers', pd.DataFrame())
+        self.commodities = kwargs.get('commodities', {})
+        self.currencies = kwargs.get('currencies', {})
+        self.macro = kwargs.get('macro', {})
+        self.period_label = kwargs.get('period_label', "1M")
+        
+        # Nettoyage automatique des données vides
+        if isinstance(self.sector_perf, list):
+            self.sector_perf = pd.DataFrame(self.sector_perf)
+            
+        logger.info(f"Market Dashboard prêt : {len(self.indices)} indices chargés.")
 
-    # ---- small helpers to build primitives ----
-    def _build_indices_panel(self):
-        """Return a small horizontal subplot with index name + sparkline + pct change."""
-        traces = []
-        rows = []
-        for name, df in self.indices.items():
-            if df is None or df.empty or "Close" not in df.columns:
-                continue
-            last = df['Close'].iloc[-1]
-            pct = (df['Close'].pct_change().iloc[-1]) * 100 if len(df) > 1 else 0.0
-            spark = go.Scattergl(x=df.index, y=df['Close'], mode='lines', line={'width': 1}, showlegend=False, hoverinfo='skip')
-            traces.append((name, spark, last, pct))
-        return traces
+    def _get_color(self, val: float) -> str:
+        # Palette harmonisée avec votre dashboard de symboles
+        return "#2b7a2b" if val >= 0 else "#d9534f"
 
-    def _sector_heatmap_trace(self):
-        """Create a sector heatmap from self.sector_perf (expects columns: sector, perf)."""
-        if self.sector_perf is None or self.sector_perf.empty:
-            return None
-        df = self.sector_perf.copy()
-        # pivot into grid by grouping heuristically (simple lexicographic)
-        df['row'] = (pd.Categorical(df['sector']).codes // 6)
-        df['col'] = (pd.Categorical(df['sector']).codes % 6)
-        z = df.pivot(index='row', columns='col', values='perf')
-        text = df.pivot(index='row', columns='col', values='sector')
-        heat = go.Heatmap(z=z.values, x=list(z.columns), y=list(z.index), text=text.values, colorscale='RdYlGn', reversescale=False, showscale=True)
-        return heat
-
-    def _top_movers_table(self, n: int = 10):
-        if self.top_movers is None or self.top_movers.empty:
-            return None
-        df = self.top_movers.head(n)
-        header = dict(values=list(df.columns), fill_color='paleturquoise')
-        cells = dict(values=[df[col].tolist() for col in df.columns], fill_color='lavender')
-        return go.Table(header=header, cells=cells)
-
-    # ---- main figure assembly ----
     def create_figure(self) -> go.Figure:
-        """Compose the market overview figure (multi-panel)."""
+        """Crée une vue 'Global Market Overview' 2x2"""
         fig = make_subplots(
-            rows=3, cols=3,
+            rows=2, cols=2,
+            column_widths=[0.55, 0.45],
+            row_heights=[0.5, 0.5],
+            vertical_spacing=0.12,
+            horizontal_spacing=0.08,
             specs=[
-                [{"type": "xy", "colspan": 2}, {"type": "xy", "rowspan": 2}, {"type": "domain"}],
-                [None, None, {"type": "table"}],
-                [{"type": "xy"}, {"type": "xy"}, {"type": "xy"}],
+                [{"type": "xy"}, {"type": "treemap"}],
+                [{"type": "table"}, {"type": "table"}]
             ],
-            subplot_titles=("Indices", "Sector Heatmap", "Top Movers",
-                            "", "", "Commodities & FX")
+            subplot_titles=(
+                f"📈 Comparaison Indices ({self.period_label})", 
+                "📊 Force Relative des Secteurs", 
+                "🔥 Top 10 Movers (S&P 500)", 
+                "🌐 Macro, FX & Commodities"
+            )
         )
 
-        # Indices panel: stack small sparklines vertically inside one subplot via traces offset
-        traces = self._build_indices_panel()
-        row_idx, col_idx = 1, 1
-        y_offset = 0
-        for name, spark, last, pct in traces:
-            fig.add_trace(spark, row=row_idx, col=col_idx)
-            fig.add_annotation(xref='paper', yref='paper',
-                               x=0.04, y=0.95 - y_offset,
-                               text=f"<b>{name}</b> {last:.2f} ({pct:+.2f}%)",
-                               showarrow=False, font={'size':10})
-            y_offset += 0.08
+        # 1. Panel Indices : Performance Relative (Base 100)
+        # On normalise pour comparer des indices à prix très différents (ex: BTC vs SP500)
+        for name, df in self.indices.items():
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                norm_price = (df['Close'] / df['Close'].iloc[0]) * 100
+                change = ((df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1) * 100
+                
+                fig.add_trace(go.Scatter(
+                    x=df.index, y=norm_price, name=name,
+                    line=dict(width=2),
+                    hovertemplate=f"<b>{name}</b>: %{{y:.2f}} (Perf: {change:+.2f}%)<extra></extra>"
+                ), row=1, col=1)
 
-        # Sector heatmap
-        heat = self._sector_heatmap_trace()
-        if heat is not None:
-            fig.add_trace(heat, row=1, col=2)
+        # 2. Treemap Secteurs
+        if not self.sector_perf.empty:
+            fig.add_trace(go.Treemap(
+                labels=self.sector_perf['sector'],
+                parents=[""] * len(self.sector_perf),
+                values=[1] * len(self.sector_perf),
+                marker=dict(
+                    colors=self.sector_perf['perf'], 
+                    colorscale='RdYlGn', 
+                    cmid=0,
+                    showscale=True,
+                    colorbar=dict(title="Perf %", thickness=15, x=1.05)
+                ),
+                text=self.sector_perf['perf'].apply(lambda x: f"{x:+.2f}%"),
+                textinfo="label+text",
+                hoverinfo="label+text+percent parent"
+            ), row=1, col=2)
 
-        # Top movers
-        table = self._top_movers_table()
-        if table is not None:
-            fig.add_trace(table, row=1, col=3)
+        # 3. Table Top Movers (Actions individuelles)
+        movers_headers = ["Symbole", "Perf %", "Secteur"]
+        movers_data = [self.top_movers['symbol'], 
+                       self.top_movers['perf'].map('{:+.2f}%'.format),
+                       self.top_movers['sector']] if not self.top_movers.empty else [[], [], []]
 
-        # Commodities & FX summary
-        # create small traces text annotations for each commodity
-        cm_x = 3; cm_row = 3
-        ypos = 0.95
-        for name, val in (self.commodities or {}).items():
-            fig.add_annotation(xref='paper', yref='paper', x=0.74, y=ypos, text=f"{name}: {val.get('price', 'N/A')}", showarrow=False, font={'size':11})
-            ypos -= 0.06
-        for name, val in (self.currencies or {}).items():
-            fig.add_annotation(xref='paper', yref='paper', x=0.74, y=ypos, text=f"{name}: {val.get('rate', 'N/A')}", showarrow=False, font={'size':11})
-            ypos -= 0.06
+        fig.add_trace(go.Table(
+            header=dict(values=[f"<b>{h}</b>" for h in movers_headers],
+                        fill_color='#2c3e50', font=dict(color='white', size=12), align='left'),
+            cells=dict(values=movers_data,
+                       fill_color='#f8f9fa', font=dict(color='black', size=11), align='left', height=28)
+        ), row=2, col=1)
 
-        fig.update_layout(height=900, showlegend=False, template='plotly_white', title_text=f"Market Overview — {self.period_label}")
+        # 4. Table Macro Consolidée
+        all_rows = self._prepare_macro_rows()
+        
+        fig.add_trace(go.Table(
+            header=dict(values=["<b>Indicateur</b>", "<b>Valeur</b>", "<b>Variation</b>"],
+                        fill_color='#34495e', font=dict(color='white', size=12), align='left'),
+            cells=dict(values=list(zip(*all_rows)),
+                       fill_color='#f8f9fa', font=dict(color='black', size=11), align='left', height=28)
+        ), row=2, col=2)
+
+        # Layout Final
+        fig.update_layout(
+            height=900,
+            template='plotly_white', # On passe en blanc pour matcher le fond de vos onglets Dash
+            margin=dict(t=80, b=40, l=40, r=40),
+            legend=dict(orientation="h", y=1.08, x=0)
+        )
         return fig
+
+    def _prepare_macro_rows(self) -> List[List[str]]:
+        rows = []
+        # Fusion des sources (Macro, FX, Commodities)
+        data_sources = [
+            ("📊 Macro", self.macro),
+            ("💱 FX", self.currencies),
+            ("📦 Comm.", self.commodities)
+        ]
+        
+        for prefix, source in data_sources:
+            for k, v in source.items():
+                if isinstance(v, dict):
+                    val = v.get('price', v.get('value', v.get('rate', 'N/A')))
+                    chg = v.get('change', '-')
+                    rows.append([f"{prefix} {k}", str(val), str(chg)])
+                else:
+                    rows.append([f"{prefix} {k}", str(v), "-"])
+        
+        return rows if rows else [["Aucune donnée", "-", "-"]]

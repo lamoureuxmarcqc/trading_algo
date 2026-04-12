@@ -1,440 +1,278 @@
-"""
-Module de gestion de portefeuille d'actions
-"""
 import json
 import os
+import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, asdict, field
 import pandas as pd
 import numpy as np
 
+# Gestion des imports optionnels pour l'affichage console riche
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.text import Text
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Order:
-    """Représente un ordre à exécuter"""
     ticker: str
-    order_type: str  # 'buy' ou 'sell'
+    order_type: str  # 'buy' or 'sell'
     quantity: float
     limit_price: Optional[float] = None
-    order_id: Optional[str] = None
-    timestamp: Optional[datetime] = None
-    status: str = 'pending'  # pending, executed, cancelled, rejected
+    order_id: str = field(default_factory=lambda: "")
+    timestamp: datetime = field(default_factory=datetime.now)
+    status: str = 'pending'
     executed_price: Optional[float] = None
     executed_quantity: Optional[float] = None
     execution_time: Optional[datetime] = None
     fees: float = 0.0
     
     def __post_init__(self):
-        if self.order_id is None:
+        if not self.order_id:
             self.order_id = f"{self.ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
-    
-    @property
-    def value(self) -> float:
-        """Valeur de l'ordre"""
-        price = self.limit_price if self.limit_price else 0
-        return self.quantity * price
-    
-    @property
-    def executed_value(self) -> float:
-        """Valeur exécutée"""
-        if self.executed_price and self.executed_quantity:
-            return self.executed_quantity * self.executed_price
-        return 0.0
-    
-    def to_dict(self) -> dict:
-        """Convertit l'ordre en dictionnaire"""
-        data = asdict(self)
-        # Conversion des datetime en string pour la sérialisation JSON
-        if self.timestamp:
-            data['timestamp'] = self.timestamp.isoformat()
-        if self.execution_time:
-            data['execution_time'] = self.execution_time.isoformat()
-        return data
-    
-    @classmethod
-    def from_dict(cls, data: dict) -> 'Order':
-        """Crée un ordre à partir d'un dictionnaire"""
-        # Conversion des strings en datetime
-        if data.get('timestamp'):
-            data['timestamp'] = datetime.fromisoformat(data['timestamp'])
-        if data.get('execution_time'):
-            data['execution_time'] = datetime.fromisoformat(data['execution_time'])
-        return cls(**data)
 
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        for key in ['timestamp', 'execution_time']:
+            if data[key] and isinstance(data[key], datetime):
+                data[key] = data[key].isoformat()
+        return data
 
 @dataclass
 class Position:
-    """Représente une ligne dans le portefeuille"""
     ticker: str
     quantity: float
     average_price: float
-    last_updated: Optional[datetime] = None
-    
-    def __post_init__(self):
-        if self.last_updated is None:
-            self.last_updated = datetime.now()
+    last_updated: datetime = field(default_factory=datetime.now)
     
     def current_value(self, current_price: float) -> float:
-        """Calcule la valeur actuelle de la position"""
         return self.quantity * current_price
     
     def unrealized_pnl(self, current_price: float) -> float:
-        """Calcule le profit/perte non réalisé"""
         return self.quantity * (current_price - self.average_price)
     
     def unrealized_pnl_percent(self, current_price: float) -> float:
-        """Calcule le pourcentage de profit/perte non réalisé"""
-        if self.average_price == 0:
-            return 0.0
-        return ((current_price - self.average_price) / self.average_price) * 100
-    
-    def cost_basis(self) -> float:
-        """Coût total d'acquisition"""
-        return self.quantity * self.average_price
-    
-    def update_average_price(self, new_quantity: float, new_price: float, is_buy: bool):
-        """Met à jour le prix moyen après un achat/vente"""
-        if is_buy:
-            # Nouveau prix moyen pondéré
-            total_cost = self.cost_basis() + (new_quantity * new_price)
-            total_quantity = self.quantity + new_quantity
-            self.average_price = total_cost / total_quantity if total_quantity > 0 else 0
-            self.quantity = total_quantity
-        else:
-            # Vente: on réduit la quantité sans changer le prix moyen
-            self.quantity -= new_quantity
-        
-        self.last_updated = datetime.now()
-    
-    def to_dict(self) -> dict:
-        """Convertit la position en dictionnaire"""
-        data = asdict(self)
-        if self.last_updated:
-            data['last_updated'] = self.last_updated.isoformat()
-        return data
-    
-    @classmethod
-    def from_dict(cls, data: dict) -> 'Position':
-        """Crée une position à partir d'un dictionnaire"""
-        if data.get('last_updated'):
-            data['last_updated'] = datetime.fromisoformat(data['last_updated'])
-        return cls(**data)
+        return (current_price / self.average_price - 1) if self.average_price > 0 else 0.0
 
+    def update_position(self, qty: float, price: float, fees: float, is_buy: bool):
+        """Logique de calcul du prix moyen pondéré (WAP)"""
+        if is_buy:
+            total_cost = (self.quantity * self.average_price) + (qty * price) + fees
+            self.quantity += qty
+            self.average_price = total_cost / self.quantity if self.quantity > 0 else 0
+        else:
+            if qty > self.quantity + 1e-9: # Marge d'erreur flottante
+                raise ValueError(f"Vente de {qty} {self.ticker} impossible (Avoir: {self.quantity})")
+            self.quantity -= qty
+        self.last_updated = datetime.now()
 
 class Portfolio:
-    """Gestionnaire de portefeuille principal"""
-    
-    def __init__(self, cash: float, positions: Optional[Dict[str, Position]] = None, name: str = "Mon Portefeuille"):
+    def __init__(self, cash: float, name: str = "Main Portfolio"):
         self.name = name
+        self.initial_capital = cash
         self.cash = cash
-        self.positions = positions if positions else {}
+        self.positions: Dict[str, Position] = {}
         self.transaction_history: List[Order] = []
-        self.performance_history: List[Dict] = []
-        self.created_at = datetime.now()
+        self.performance_history: List[Dict] = [] # Liste pour la courbe d'équité
         self.last_updated = datetime.now()
-    
-    def total_value(self, market_prices: Dict[str, float]) -> float:
-        """Calcule la valeur totale du portefeuille"""
-        positions_value = sum(
-            pos.current_value(market_prices.get(ticker, 0))
-            for ticker, pos in self.positions.items()
-        )
-        return self.cash + positions_value
-    
-    def get_position(self, ticker: str) -> Optional[Position]:
-        """Récupère une position par son ticker"""
-        return self.positions.get(ticker)
-    
-    def add_position(self, ticker: str, quantity: float, price: float) -> Order:
-        """Ajoute une nouvelle position (achat)"""
-        if ticker in self.positions:
-            # Mise à jour d'une position existante
-            self.positions[ticker].update_average_price(quantity, price, is_buy=True)
-        else:
-            # Nouvelle position
-            self.positions[ticker] = Position(ticker, quantity, price)
-        
-        # Mise à jour du cash
-        cost = quantity * price
-        self.cash -= cost
-        
-        # Création de l'ordre
-        order = Order(
-            ticker=ticker,
-            order_type='buy',
-            quantity=quantity,
-            limit_price=price,
-            status='executed',
-            executed_price=price,
-            executed_quantity=quantity,
-            execution_time=datetime.now()
-        )
-        
-        self.transaction_history.append(order)
-        self.last_updated = datetime.now()
-        
-        return order
-    
-    def remove_position(self, ticker: str, quantity: float, price: float) -> Order:
-        """Vend une partie ou la totalité d'une position"""
-        if ticker not in self.positions:
-            raise ValueError(f"Position {ticker} non trouvée")
-        
-        position = self.positions[ticker]
-        
-        if quantity > position.quantity:
-            raise ValueError(f"Quantité insuffisante: {position.quantity} disponibles")
-        
-        # Mise à jour de la position
-        position.update_average_price(quantity, price, is_buy=False)
-        
-        # Si quantité devient 0, supprimer la position
-        if position.quantity <= 0:
-            del self.positions[ticker]
-        
-        # Mise à jour du cash
-        revenue = quantity * price
-        self.cash += revenue
-        
-        # Création de l'ordre
-        order = Order(
-            ticker=ticker,
-            order_type='sell',
-            quantity=quantity,
-            limit_price=price,
-            status='executed',
-            executed_price=price,
-            executed_quantity=quantity,
-            execution_time=datetime.now()
-        )
-        
-        self.transaction_history.append(order)
-        self.last_updated = datetime.now()
-        
-        return order
-    
-    def get_allocation(self, market_prices: Dict[str, float]) -> Dict[str, float]:
-        """Calcule l'allocation actuelle du portefeuille"""
-        total = self.total_value(market_prices)
-        if total == 0:
-            return {}
-        
-        allocation = {'cash': self.cash / total}
-        
-        for ticker, position in self.positions.items():
-            if ticker in market_prices:
-                value = position.current_value(market_prices[ticker])
-                allocation[ticker] = value / total
-        
-        return allocation
-    
-    def generate_rebalance_orders(
-        self, 
-        target_allocations: Dict[str, float], 
-        market_prices: Dict[str, float],
-        min_trade_pct: float = 0.01,
-        min_trade_value: float = 100.0
-    ) -> List[Order]:
-        """
-        Génère des ordres pour rééquilibrer le portefeuille
-        
-        Args:
-            target_allocations: Allocation cible (ticker -> pourcentage)
-            market_prices: Prix actuels du marché
-            min_trade_pct: Seuil minimum en % de la valeur totale pour trader
-            min_trade_value: Valeur minimum en $ pour trader
-        
-        Returns:
-            Liste d'ordres à exécuter
-        """
-        orders = []
-        total_val = self.total_value(market_prices)
-        
-        if total_val == 0:
-            return orders
-        
-        # S'assurer que cash est dans les allocations
-        if 'cash' not in target_allocations:
-            target_allocations['cash'] = 0.0
-        
-        # Calculer les valeurs cibles
-        target_values = {}
-        for ticker, target_pct in target_allocations.items():
-            target_values[ticker] = total_val * target_pct
-        
-        current_values = {'cash': self.cash}
-        for ticker, position in self.positions.items():
-            if ticker in market_prices:
-                current_values[ticker] = position.current_value(market_prices[ticker])
-            else:
-                current_values[ticker] = 0.0
-        
-        # Générer les ordres
-        for ticker, target_value in target_values.items():
-            current_value = current_values.get(ticker, 0)
-            diff_value = target_value - current_value
-            
-            # Vérifier le seuil
-            if abs(diff_value) / total_val < min_trade_pct or abs(diff_value) < min_trade_value:
-                continue
-            
-            if ticker == 'cash':
-                # Pour le cash, pas d'ordre, juste ajuster
-                continue
-            
-            # Calculer la quantité à trader
-            price = market_prices.get(ticker)
-            if price is None or price <= 0:
-                continue
-            
-            quantity = diff_value / price
-            
-            if diff_value > 0:
-                # Achat
-                orders.append(Order(
-                    ticker=ticker,
-                    order_type='buy',
-                    quantity=abs(quantity),
-                    limit_price=price
-                ))
-            else:
-                # Vente
-                orders.append(Order(
-                    ticker=ticker,
-                    order_type='sell',
-                    quantity=abs(quantity),
-                    limit_price=price
-                ))
-        
-        return orders
-    
-    def calculate_performance(self, market_prices: Dict[str, float], initial_cash: float = None) -> Dict:
-        """Calcule les métriques de performance du portefeuille"""
-        if initial_cash is None:
-            initial_cash = self.cash + sum(
-                pos.cost_basis() for pos in self.positions.values()
-            )
-        
-        total_value = self.total_value(market_prices)
-        
-        # Profit/Perte total
-        total_pnl = total_value - initial_cash
-        total_pnl_pct = (total_pnl / initial_cash * 100) if initial_cash > 0 else 0
-        
-        # Profit/Perte par position
-        positions_pnl = {}
-        for ticker, position in self.positions.items():
-            if ticker in market_prices:
-                positions_pnl[ticker] = {
-                    'unrealized_pnl': position.unrealized_pnl(market_prices[ticker]),
-                    'unrealized_pnl_pct': position.unrealized_pnl_percent(market_prices[ticker]),
-                    'current_value': position.current_value(market_prices[ticker]),
-                    'cost_basis': position.cost_basis()
-                }
-        
-        # Calcul du rendement pondéré
-        if self.performance_history:
-            # Logique de calcul du rendement (simplifié)
-            returns = [perf.get('return', 0) for perf in self.performance_history[-30:]]
-            if returns:
-                avg_return = np.mean(returns)
-                volatility = np.std(returns) if len(returns) > 1 else 0
-                sharpe = avg_return / volatility * np.sqrt(252) if volatility > 0 else 0
-            else:
-                avg_return = volatility = sharpe = 0
-        else:
-            avg_return = volatility = sharpe = 0
-        
-        return {
-            'total_value': total_value,
-            'cash': self.cash,
-            'invested': total_value - self.cash,
-            'total_pnl': total_pnl,
-            'total_pnl_pct': total_pnl_pct,
-            'positions': positions_pnl,
-            'avg_daily_return': avg_return,
-            'volatility': volatility,
-            'sharpe_ratio': sharpe,
-            'num_positions': len(self.positions)
-        }
-    
+
+    # --- PERSISTENCE ---
+
     def save_to_file(self, filepath: str):
-        """Sauvegarde le portefeuille dans un fichier JSON"""
+        """Sauvegarde l'état complet en JSON."""
         data = {
-            'name': self.name,
-            'cash': self.cash,
-            'created_at': self.created_at.isoformat(),
-            'last_updated': self.last_updated.isoformat(),
-            'positions': {ticker: pos.to_dict() for ticker, pos in self.positions.items()},
-            'transaction_history': [order.to_dict() for order in self.transaction_history]
+            "name": self.name,
+            "cash": float(self.cash),
+            "initial_capital": float(self.initial_capital),
+            "positions": {t: asdict(pos) for t, pos in self.positions.items()},
+            "history": [o.to_dict() for o in self.transaction_history],
+            "performance_history": self.performance_history
         }
         
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        
-        print(f"✅ Portefeuille sauvegardé: {filepath}")
-    
+        # Nettoyage des dates dans les positions
+        for t in data["positions"]:
+            if isinstance(data["positions"][t]["last_updated"], datetime):
+                data["positions"][t]["last_updated"] = data["positions"][t]["last_updated"].isoformat()
+
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=4, default=str)
+
     @classmethod
     def load_from_file(cls, filepath: str) -> 'Portfolio':
-        """Charge un portefeuille depuis un fichier JSON"""
-        with open(filepath, 'r', encoding='utf-8') as f:
+        """Reconstruit le Portfolio depuis un JSON."""
+        if not os.path.exists(filepath):
+            return None
+            
+        with open(filepath, 'r') as f:
             data = json.load(f)
         
-        # Reconstruire les positions
-        positions = {}
+        portfolio = cls(cash=float(data['cash']), name=data['name'])
+        portfolio.initial_capital = float(data.get('initial_capital', data['cash']))
+        portfolio.performance_history = data.get('performance_history', [])
+        
+        # Reconstruction Positions
         for ticker, pos_data in data.get('positions', {}).items():
-            positions[ticker] = Position.from_dict(pos_data)
-        
-        # Créer le portefeuille
-        portfolio = cls(
-            cash=data['cash'],
-            positions=positions,
-            name=data.get('name', 'Mon Portefeuille')
-        )
-        
-        # Reconstruire l'historique
-        portfolio.created_at = datetime.fromisoformat(data['created_at'])
-        portfolio.last_updated = datetime.fromisoformat(data['last_updated'])
-        portfolio.transaction_history = [
-            Order.from_dict(order_data) 
-            for order_data in data.get('transaction_history', [])
-        ]
-        
-        return portfolio
-    
-    def get_transaction_history(self, ticker: Optional[str] = None) -> List[Order]:
-        """Récupère l'historique des transactions"""
-        if ticker:
-            return [order for order in self.transaction_history if order.ticker == ticker]
-        return self.transaction_history
-    
-    def get_summary(self, market_prices: Dict[str, float]) -> pd.DataFrame:
-        """Retourne un résumé du portefeuille sous forme de DataFrame"""
-        rows = []
-        
-        for ticker, position in self.positions.items():
-            price = market_prices.get(ticker, 0)
-            current_value = position.current_value(price)
-            pnl = position.unrealized_pnl(price)
-            pnl_pct = position.unrealized_pnl_percent(price)
+            if isinstance(pos_data.get('last_updated'), str):
+                pos_data['last_updated'] = datetime.fromisoformat(pos_data['last_updated'])
+            portfolio.positions[ticker] = Position(**pos_data)
             
-            rows.append({
-                'Ticker': ticker,
-                'Quantité': position.quantity,
-                'Prix moyen': position.average_price,
+        # Reconstruction Historique Transactions
+        for h in data.get('history', []):
+            for k in ['timestamp', 'execution_time']:
+                if h.get(k) and isinstance(h[k], str):
+                    h[k] = datetime.fromisoformat(h[k])
+            
+            order = Order(**{k: v for k, v in h.items() if k in Order.__dataclass_fields__})
+            portfolio.transaction_history.append(order)
+            
+        return portfolio
+
+    # --- LOGIQUE MÉTIER ---
+
+    def execute_order(self, order: Order) -> bool:
+        """Exécute l'ordre et met à jour le cash et les positions."""
+        try:
+            is_buy = order.order_type.lower() == 'buy'
+            price = order.executed_price or order.limit_price or 0
+            qty = order.executed_quantity or order.quantity
+            total_cost = (qty * price) + order.fees
+            
+            if is_buy and total_cost > self.cash:
+                logger.error(f"Cash insuffisant: {self.cash:.2f} < {total_cost:.2f}")
+                return False
+
+            if order.ticker not in self.positions:
+                if not is_buy: return False
+                self.positions[order.ticker] = Position(order.ticker, 0, 0)
+            
+            self.positions[order.ticker].update_position(qty, price, order.fees, is_buy)
+            
+            # Nettoyage si position fermée
+            if self.positions[order.ticker].quantity <= 1e-10:
+                del self.positions[order.ticker]
+
+            self.cash += (qty * price * (-1 if is_buy else 1)) - order.fees
+            
+            order.status = 'executed'
+            order.execution_time = datetime.now()
+            if order not in self.transaction_history:
+                self.transaction_history.append(order)
+            
+            self.last_updated = datetime.now()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erreur exécution {order.ticker}: {e}")
+            return False
+
+    def update_history(self, market_prices: Dict[str, float]):
+        """Point d'entrée pour le Dash : enregistre un point sur la courbe d'équité."""
+        perf = self.calculate_performance(market_prices)
+        self.performance_history.append({
+            'timestamp': datetime.now().isoformat(),
+            'total_value': float(perf['total_value']),
+            'cash': float(self.cash)
+        })
+        # Garder les 1000 derniers points pour limiter la taille du JSON
+        if len(self.performance_history) > 1000:
+            self.performance_history.pop(0)
+
+    def calculate_performance(self, market_prices: Dict[str, float]) -> Dict[str, Any]:
+        """Calcul complet pour le Dashboard."""
+        total_market_value = self.cash
+        pos_performance = {}
+
+        for t, pos in self.positions.items():
+            price = market_prices.get(t, pos.average_price)
+            val = pos.current_value(price)
+            total_market_value += val
+            
+            pos_performance[t] = {
+                'qty': pos.quantity,
+                'avg_price': pos.average_price,
+                'current_price': price,
+                'value': val,
+                'pnl': pos.unrealized_pnl(price),
+                'pnl_pct': pos.unrealized_pnl_percent(price) * 100
+            }
+
+        total_pnl = total_market_value - self.initial_capital
+        total_pnl_pct = (total_pnl / self.initial_capital * 100) if self.initial_capital > 0 else 0
+
+        return {
+            'total_value': total_market_value,
+            'cash': self.cash,
+            'total_pnl': total_pnl,
+            'total_pnl_pct': total_pnl_pct,
+            'positions': pos_performance
+        }
+
+    def get_allocation(self, market_prices: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+        """Retourne l'allocation en % pour les graphiques."""
+        prices = market_prices or {}
+        perf = self.calculate_performance(prices)
+        total = perf['total_value']
+        
+        if total <= 0: return {"Cash": 100.0}
+
+        alloc = {t: (data['value'] / total) for t, data in perf['positions'].items()}
+        alloc['Cash'] = (self.cash / total)
+        return alloc
+
+    def get_summary(self, market_prices: Optional[Dict[str, float]] = None) -> pd.DataFrame:
+        """Génère le DataFrame utilisé par dash_table."""
+        prices = market_prices or {}
+        if not self.positions:
+            return pd.DataFrame()
+
+        data = []
+        for t, pos in self.positions.items():
+            price = prices.get(t, pos.average_price)
+            data.append({
+                'Ticker': t,
+                'Qty': pos.quantity,
+                'Prix moyen': pos.average_price,
                 'Prix actuel': price,
-                'Valeur': current_value,
-                'Coût': position.cost_basis(),
-                'P&L': pnl,
-                'P&L %': pnl_pct
+                'Valeur': pos.current_value(price),
+                'P&L': pos.unrealized_pnl(price),
+                'P&L %': pos.unrealized_pnl_percent(price)
             })
+
+        df = pd.DataFrame(data)
+        total_mkt_val = df['Valeur'].sum() + self.cash
+        df['Poids %'] = df['Valeur'] / total_mkt_val if total_mkt_val > 0 else 0
+        return df.sort_values('Valeur', ascending=False)
+
+    def display(self, market_prices: Dict[str, float]):
+        """Affichage console formaté."""
+        df = self.get_summary(market_prices)
+        total_val = df['Valeur'].sum() + self.cash if not df.empty else self.cash
         
-        df = pd.DataFrame(rows)
-        if not df.empty:
-            df = df.sort_values('Valeur', ascending=False)
+        print(f"\n{'='*50}\nPORTFOLIO: {self.name.upper()}\n{'='*50}")
+        print(f"VALEUR TOTALE: {total_val:,.2f} $ | CASH: {self.cash:,.2f} $")
         
-        return df
+        if RICH_AVAILABLE and not df.empty:
+            console = Console()
+            table = Table(show_header=True, header_style="bold cyan", box=None)
+            for col in df.columns: table.add_column(col)
+            
+            for _, row in df.iterrows():
+                pnl_style = "green" if row['P&L'] >= 0 else "red"
+                table.add_row(
+                    row['Ticker'],
+                    f"{row['Qty']:.2f}",
+                    f"{row['Prix moyen']:,.2f}",
+                    f"{row['Prix actuel']:,.2f}",
+                    f"{row['Valeur']:,.2f}",
+                    Text(f"{row['P&L']:+,.2f}", style=pnl_style),
+                    Text(f"{row['P&L %']:.2%}", style=pnl_style),
+                    f"{row['Poids %']:.1%}"
+                )
+            console.print(table)
+        else:
+            print(df.to_string(index=False) if not df.empty else "Aucune position.")

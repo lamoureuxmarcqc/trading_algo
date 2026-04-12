@@ -1,96 +1,233 @@
-# trading_algo/web_dashboard/callbacks/portfolio_callbacks.py
-from dash import Input, Output, State, callback, no_update
-import plotly.graph_objects as go
-import plotly.express as px
+from dash import Input, Output, State, callback_context, dash_table, html
+import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import html, dcc
+import plotly.graph_objects as go
+
 from trading_algo.portfolio.portfoliomanager import PortfolioManager
+from trading_algo.visualization.portfoliodashboard import PortfolioDashboard
 from trading_algo.data.data_extraction import StockDataExtractor
 
+
 def register_portfolio_callbacks(app):
-    
+
+    manager = PortfolioManager(StockDataExtractor)
+
+    # =========================================================
+    # 🔹 LOAD PORTFOLIO LIST
+    # =========================================================
     @app.callback(
-        Output('portfolio-selector', 'options'),
-        Input('refresh-interval', 'n_intervals')
+        Output("portfolio-selector", "options"),
+        Input("portfolio-refresh-timer", "n_intervals")
     )
-    def update_portfolio_list(n):
-        manager = PortfolioManager(StockDataExtractor)
+    def refresh_portfolio_list(_):
         portfolios = manager.list_portfolios()
-        return [{'label': name, 'value': name} for name in portfolios]
-    
+        return [{"label": p, "value": p} for p in portfolios]
+
+    # =========================================================
+    # 🔹 LOAD PORTFOLIO DATA
+    # =========================================================
     @app.callback(
-        [Output('portfolio-summary', 'children'),
-         Output('portfolio-allocation-chart', 'figure'),
-         Output('portfolio-performance-chart', 'figure'),
-         Output('positions-pnl-chart', 'figure'),
-         Output('portfolio-data-store', 'data')],
-        Input('load-portfolio-btn', 'n_clicks'),
-        State('portfolio-selector', 'value')
+        Output("portfolio-data-store", "data"),
+        Input("load-portfolio-btn", "n_clicks"),
+        State("portfolio-selector", "value"),
+        prevent_initial_call=True
     )
     def load_portfolio(n_clicks, portfolio_name):
         if not portfolio_name:
-            return no_update
-        
-        manager = PortfolioManager(StockDataExtractor)
+            return {}
+
         portfolio = manager.load_portfolio(portfolio_name)
         if not portfolio:
-            return "Portefeuille non trouvé", go.Figure(), go.Figure(), go.Figure(), {}
-        
-        analysis = manager.analyze_portfolio()
-        perf = analysis['performance']
-        
-        # Résumé textuel
-        summary = html.Div([
-            html.P(f"Valeur totale: ${perf['total_value']:,.2f}"),
-            html.P(f"Liquidités: ${perf['cash']:,.2f}"),
-            html.P(f"Investi: ${perf['invested']:,.2f}"),
-            html.P(f"P&L total: ${perf['total_pnl']:,.2f} ({perf['total_pnl_pct']:.2f}%)"),
-            html.P(f"Positions: {perf['num_positions']}"),
-        ])
-        
-        # Graphique d'allocation (camembert)
-        alloc = analysis['allocation']
-        if alloc:
-            labels = list(alloc.keys())
-            values = list(alloc.values())
-            fig_alloc = px.pie(values=values, names=labels, title="Allocation actuelle")
-        else:
-            fig_alloc = go.Figure()
-        
-        # Graphique de performance (si historique disponible)
-        if hasattr(portfolio, 'performance_history') and portfolio.performance_history:
-            df = pd.DataFrame(portfolio.performance_history)
-            fig_perf = px.line(df, x='date', y='total_value', title="Évolution de la valeur")
-        else:
-            fig_perf = go.Figure()
-        
-        # Graphique des P&L par position
-        positions_data = []
-        for ticker, data in perf['positions'].items():
-            positions_data.append({
-                'Ticker': ticker,
-                'P&L %': data['unrealized_pnl_pct'],
-                'P&L $': data['unrealized_pnl']
-            })
-        if positions_data:
-            df_pnl = pd.DataFrame(positions_data)
-            fig_pnl = px.bar(df_pnl, x='Ticker', y='P&L %', 
-                             color='P&L %', color_continuous_scale='RdYlGn',
-                             title="P&L non réalisé par position (%)")
-        else:
-            fig_pnl = go.Figure()
-        
-        return summary, fig_alloc, fig_perf, fig_pnl, analysis
+            return {}
 
-# NOTE:
-# The callback that previously wrote to 'tab-content' was removed from this module.
-# The app-level callback responsible for rendering tab content must be defined once
-# (see trading_algo/web_dashboard/app.py). Having multiple callbacks outputting to the
-# same property causes the Dash error:
-# "Output ... is already in use."
-#
-# If you need to switch tab content from here, either:
-# - Emit an intermediate dcc.Store value and let the single app callback read that store, or
-# - Merge the tab rendering logic into one callback (recommended).
-#
-# This file focuses on portfolio-related callbacks only
+        analysis = manager.analyze_portfolio()
+
+        return {
+            "portfolio_name": portfolio_name,
+            "analysis": analysis
+        }
+
+    # =========================================================
+    # 🔹 KPI UPDATE
+    # =========================================================
+    @app.callback(
+        Output("kpi-total-value", "children"),
+        Output("kpi-return", "children"),
+        Output("kpi-volatility", "children"),
+        Output("kpi-sharpe", "children"),
+        Input("portfolio-data-store", "data")
+    )
+    def update_kpis(data):
+
+        if not data or "analysis" not in data:
+            return "---", "---", "---", "---"
+
+        analysis = data["analysis"]
+        perf = analysis.get("performance", {})
+        risk = analysis.get("risk_metrics", {})
+
+        total_value = perf.get("total_value", 0)
+        pnl_pct = perf.get("total_pnl_pct", 0)
+
+        volatility = risk.get("volatility", 0)
+        sharpe = risk.get("sharpe_ratio", 0)
+
+        return (
+            f"{total_value:,.0f} $",
+            f"{pnl_pct:.2f} %",
+            f"{volatility:.2%}" if volatility else "N/A",
+            f"{sharpe:.2f}" if sharpe else "N/A"
+        )
+
+    # =========================================================
+    # 🔹 MAIN GRAPH (STRATEGIC) - SÉCURISÉ
+    # =========================================================
+    @app.callback(
+        Output("portfolio-main-dashboard", "figure"),
+        Input("portfolio-data-store", "data")
+    )
+    def update_main_chart(data):
+        # 1. Vérification stricte
+        if not data or "portfolio_name" not in data:
+            return go.Figure()  # Retourne une figure vide plutôt que {}
+
+        # 2. Re-charger l'objet localement pour éviter les conflits entre utilisateurs
+        p_name = data["portfolio_name"]
+        portfolio = manager.load_portfolio(p_name)
+
+        if not portfolio:
+            return go.Figure()
+
+        dashboard = PortfolioDashboard(portfolio, manager)
+
+        # Données mock (à remplacer par tes vrais flux plus tard)
+        macro = {}
+        indices = pd.DataFrame()
+        fundamentals = {}
+
+        return dashboard.create_strategic_report(macro, indices, fundamentals)
+
+    # =========================================================
+    # 🔹 POSITIONS TABLE - SÉCURISÉ (UNIQUE CALLBACK)
+    # =========================================================
+    @app.callback(
+        Output("positions-table", "children"),
+        Input("portfolio-data-store", "data")
+    )
+    def update_positions(data):
+        """
+        Single callback responsible for rendering the positions table.
+        Consolidated logic from previous duplicate callbacks.
+        """
+        if not data or "portfolio_name" not in data:
+            return dbc.Alert("Sélectionnez un portefeuille pour voir les positions.", color="info")
+
+        p_name = data["portfolio_name"]
+        portfolio = manager.load_portfolio(p_name)
+
+        if not portfolio:
+            return dbc.Alert("Erreur lors du chargement du portefeuille.", color="danger")
+
+        prices = data.get("analysis", {}).get("market_prices", {})
+        df = portfolio.get_summary(prices)
+
+        if df is None or df.empty:
+            return dbc.Alert("Aucune position ouverte.", color="warning")
+
+        return dbc.Table.from_dataframe(
+            df,
+            striped=True,
+            bordered=True,
+            hover=True,
+            size="sm",
+            responsive=True
+        )
+
+    # =========================================================
+    # 🔥 🔥 🔥 CRITICAL FIX — TAB SWITCHING
+    # =========================================================
+    @app.callback(
+        Output("strat-view", "style"),
+        Output("tech-view", "style"),
+        Input("card-tabs", "active_tab")
+    )
+    def switch_tabs(active_tab):
+
+        if active_tab == "tab-tech":
+            return {"display": "none"}, {"display": "block"}
+
+        return {"display": "block"}, {"display": "none"}
+
+    # =========================================================
+    # 🔹 RISK METRICS PANEL
+    # =========================================================
+    @app.callback(
+        Output("risk-metrics-div", "children"),
+        Input("portfolio-data-store", "data")
+    )
+    def update_risk(data):
+
+        if not data:
+            return "N/A"
+
+        risk = data.get("analysis", {}).get("risk_metrics", {})
+
+        return dbc.ListGroup([
+            dbc.ListGroupItem(f"Sharpe: {risk.get('sharpe_ratio', 'N/A')}"),
+            dbc.ListGroupItem(f"VaR: {risk.get('value_at_risk', 'N/A')}"),
+            dbc.ListGroupItem(f"Vol: {risk.get('volatility', 'N/A')}"),
+        ])
+
+
+# =========================================================
+# HELPERS
+# =========================================================
+
+def _create_data_table(df):
+
+    if df is None or df.empty:
+        return html.Div("Aucune position")
+
+    return dash_table.DataTable(
+        data=df.to_dict('records'),
+        columns=[{"name": col, "id": col} for col in df.columns],
+        style_table={"overflowX": "auto"},
+        style_cell={"textAlign": "left"},
+        style_header={"fontWeight": "bold"},
+    )
+
+
+def _render_risk_cards(risk):
+
+    if not risk:
+        return html.Div("No risk data")
+
+    return dbc.Row([
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H6("Sharpe"),
+            html.H4(f"{risk.get('sharpe_ratio', 0):.2f}")
+        ]))),
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H6("Volatility"),
+            html.H4(f"{risk.get('volatility', 0)*100:.2f}%")
+        ]))),
+    ])
+
+
+def _empty_dashboard(error=None):
+
+    fig = go.Figure()
+
+    msg = error if error else "Aucun portefeuille chargé"
+
+    return (
+        fig,
+        fig,
+        msg,
+        "---",
+        "---",
+        "---",
+        html.Div(),
+        html.Div(),
+        {}
+    )

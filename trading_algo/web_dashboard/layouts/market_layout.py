@@ -21,6 +21,12 @@ def market_layout():
             dbc.Col(dcc.Download(id='market-download'), width=2),
             dbc.Col(dcc.Checklist(options=[{'label': 'Auto-refresh', 'value': 'on'}], value=['on'], id='market-auto-refresh', inline=True), width=1),
         ], align='center', className='mb-2'),
+
+        # NEW: Market health summary row (small cards)
+        dbc.Row([
+            dbc.Col(html.Div(id='market-health', children=[], className="mb-3"), width=12)
+        ]),
+
         dbc.Row([
             dbc.Col(dcc.Loading(id='market-loading', type='circle', children=[
                 dcc.Graph(id='market-overview-fig')

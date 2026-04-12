@@ -23,7 +23,12 @@ setup(
         "dash-bootstrap-components>=1.0.0,<2.0.0",
         "dash-cytoscape>=1.0.0,<2.0.0",   # Si vous l'utilisez
         "apscheduler>=1.0.0",
-        "redis>=1.0.0"
+        "redis>=1.0.0",
+        "dash_table>=1.0.0",
+        "dash-ag-grid>=1.0.0",
+        "kaleido>=1.2.0",
+        "apscheduler>=1.0.0",
+        "dotenv>=0.0.1"
     ],
     python_requires=">=3.8",
     extras_require={

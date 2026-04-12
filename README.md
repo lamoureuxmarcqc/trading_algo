@@ -1,220 +1,174 @@
-Le README a été mis à jour pour refléter la nouvelle structure du projet et les changements d'installation.
-
-```markdown
 # Trading Algo – Prédiction et Trading Automatisé d’Actions
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub](https://img.shields.io/badge/GitHub-Repo-green)](https://github.com/lamoureuxmarcqc/trading_algo)
 
-**Trading Algo** est une suite complète d’outils pour l’extraction de données financières, l’entraînement de modèles prédictifs (LSTM, SVR, MLP, CatBoost…) et la visualisation interactive des performances.  
-Conçu pour analyser les actions du S&P 500, ce projet permet de backtester des stratégies, de comparer plusieurs modèles de machine learning et de générer des tableaux de bord automatiques.
+**Trading Algo** est une suite logicielle modulaire pour l'analyse financière quantitative. Il combine l'extraction de données massives, le machine learning (LSTM, CatBoost, etc.) et des visualisations interactives pour aider à la décision de trading sur le S&P 500.
+
+---
+
+## 📌 Sommaire
+1. [Fonctionnalités](#-fonctionnalités)
+2. [Structure du projet](#-structure-du-projet)
+3. [Installation](#-installation)
+4. [Utilisation](#-utilisation)
+5. [Configuration](#-configuration-avancée)
+6. [Tests](#-tests)
+7. [Web Dashboard](#web-dashboard)
+8. [Contributions](#-contribution)
+9. [Licence](#-licence)
 
 ---
 
 ## ✨ Fonctionnalités
 
-- 📈 **Extraction de données** via Yahoo Finance (`yfinance`) et gestion de cache.
-- 🧠 **Entraînement multi-modèles** :
-  - Réseaux de neurones LSTM (Keras / TensorFlow)
-  - Régresseurs : Support Vector, MLP, CatBoost, Régression Linéaire
-- 🔍 **Recherche automatique du meilleur modèle** (`find_best_model.py`)
-- 📊 **Tableaux de bord interactifs** générés avec Plotly / Dash
-- 💾 **Sauvegarde** des modèles, scalers et métriques (JSON / images)
-- ⚙️ **Configuration centralisée** via variables d’environnement (fichier `.env`)
-- 🧪 **Tests d’intégration** pour valider les importations et le pipeline
+- 📈 **Extraction de données** : Intégration native avec `yfinance`, support de cache local pour éviter les limitations d'API.
+- 🧠 **Intelligence Artificielle** : 
+  - Modèles Deep Learning : **LSTM** (TensorFlow) pour les séries temporelles.
+  - Modèles Classiques : **CatBoost**, **SVR**, **MLP**, et **Régression Linéaire**.
+- 🔍 **Auto-ML Lite** : Recherche automatique du meilleur modèle via `find_best_model.py`.
+- 📊 **Dashboards** : Génération automatique de rapports interactifs en HTML (Plotly/Dash).
+- 💼 **Gestion de Portefeuille** : Outils de screening et de suivi des performances.
 
 ---
 
-## 🗂️ Structure du projet
+## 🗂️ Structure du Projet
 
-```
-projet_trading/
-├── trading_algo/               # Package principal
-│   ├── data/                   # Extraction et prétraitement
-│   │   └── data_extraction.py
-│   ├── models/                 # Modèles ML et entraînement
-│   │   ├── stockmodeltrain.py
-│   │   ├── find_best_model.py
-│   │   └── stockpredictor.py
-│   ├── preprocessing/          # Préparation des données
-│   ├── screening/              # Screening des actions S&P500
-│   │   └── actions_sp500.py
-│   ├── visualization/          # Génération de graphiques et dashboards
-│   │   └── dashboard.py
-│   ├── __init__.py
-│   └── __main__.py             # Point d'entrée principal
-├── pyproject.toml              # Configuration moderne du projet (dépendances)
-├── .env                        # Variables d'environnement (clés API)
-├── .gitignore                  # Fichiers ignorés par Git
-├── README.md                   # Ce fichier
-└── ...
-```
-
-> **Note** : Les dossiers `checkpoints/`, `models_saved/`, `dashboards/`, `cache/` et les fichiers `.pyc` sont exclus du versionnement (via `.gitignore`).
+```text
+trading_algo/           # Package principal
+├── data/               # Extraction et gestion des données boursières
+├── models/             # Architecture des modèles et scripts d'entraînement
+├── preprocessing/      # Pipelines de nettoyage et scaling
+├── screening/          # Algorithmes de sélection (S&P 500)
+├── visualization/      # Moteur de rendu des dashboards
+├── web_dashboard/      # Interface Dash pour visualisation et contrôle
+├── __init__.py
+└── __main__.py         # Point d'entrée CLI
+pyproject.toml          # Dépendances et configuration build
+.env                    # Secrets et configurations (à créer)
 
 ---
 
 ## 🚀 Installation
 
-### 1. Cloner le dépôt
+### 1. Cloner et préparer l'environnement
 ```bash
-git clone https://github.com/lamoureuxmarcqc/trading_algo.git
+git clone [https://github.com/lamoureuxmarcqc/trading_algo.git](https://github.com/lamoureuxmarcqc/trading_algo.git)
 cd trading_algo
-```
-
-### 2. Créer un environnement virtuel (recommandé)
-```bash
 python -m venv venv
-source venv/bin/activate      # Linux / Mac
-venv\Scripts\activate         # Windows
+# Activation (Linux/Mac) : source venv/bin/activate | (Windows) : venv\Scripts\activate
 ```
 
-### 3. Installer le package en mode développement
+### 2. Installation du package
 ```bash
+pip install --upgrade pip
 pip install -e .
 ```
-Cette commande installe toutes les dépendances listées dans `pyproject.toml` et rend la commande `trading-algo` disponible dans l’environnement virtuel.
 
-### 4. Configurer les variables d’environnement
-Créez un fichier `.env` à la racine du projet (à partir de `.env.example` si fourni) et renseignez vos clés API :
-
+### 3. Configuration des API
+Copiez le fichier d'exemple et remplissez vos clés :
+```bash
+cp .env.example .env  # Si disponible, sinon créez un fichier .env
 ```
-FMP_API_KEY=votre_cle_fmp
-POLYGON_API_KEY=votre_cle_polygon
-TWITTER_X_BEARER=votre_bearer_token_twitter
-NY_TIMES_API_KEY=votre_cle_nytimes
-```
-
-Si certaines clés ne sont pas disponibles, le programme utilisera des données simulées.
+*Le système fonctionne en mode dégradé (données simulées) si les clés sont manquantes.*
 
 ---
 
 ## 🏁 Utilisation
 
-### Lancer l’analyse interactive d’une action
-```bash
-trading-algo
-```
-Sans argument, un menu interactif vous propose de choisir une action parmi les plus populaires ou d’entrer un symbole personnalisé.
+L'outil s'utilise principalement via la commande globale `trading-algo`.
 
-### Analyser une action spécifique
-```bash
-trading-algo AAPL
-```
-L’analyse de base est lancée avec le modèle `StockModelTrain`.
-
-### Mode avancé (avec `StockPredictor`)
-```bash
-trading-algo AAPL --advanced
-```
-Utilise le module avancé pour des prédictions plus détaillées.
-
-### Autres options
-```bash
-trading-algo --help
-```
-Affiche toutes les options disponibles : `--period`, `--mode`, `--dashboard`, etc.
-
-### Exemples
-- Comparer plusieurs actions :  
-  ```bash
-  trading-algo AAPL,MSFT,GOOGL --mode compare
-  ```
-- Lancer le screening du S&P 500 :  
-  ```bash
-  trading-algo --mode screen
-  ```
-- Entraîner un modèle sans analyse :  
-  ```bash
-  trading-algo AAPL --mode train
-  ```
+| Commande | Description |
+| :--- | :--- |
+| `trading-algo` | Lance le menu interactif. |
+| `trading-algo AAPL --advanced` | Analyse complète de l'action avec modèle avancé. |
+| `trading-algo MSFT --mode train` | Entraîne le modèle sur Microsoft. |
+| `trading-algo AAPL,TSLA --mode compare` | Compare les performances de deux titres. |
+| `trading-algo --mode screen` | Recherche les meilleures opportunités du S&P 500. |
 
 ---
 
-## ⚙️ Configuration avancée
+## 📊 Sorties et Artefacts
 
-Le fichier `.env` supporte également des paramètres généraux :
-
-```ini
-DEBUG=True
-LOG_LEVEL=INFO
-CACHE_DIR=cache/
-DATA_DIR=data/
-MODELS_DIR=models_saved/
-YF_CACHE=True
-YF_CACHE_EXPIRE=3600
-TRAIN_TEST_SPLIT=0.8
-RANDOM_SEED=42
-```
-
----
-
-## 📊 Résultats et Métriques
-
-Après chaque entraînement, les artefacts suivants sont sauvegardés dans `models_saved/<SYMBOLE>/` :
-- Modèle au format `.keras`
-- Scalers (feature/target) au format `.pkl`
-- Graphiques d’entraînement (`.png`)
-- Fichier JSON contenant les métriques
-
-Les dashboards générés (mode `--dashboard` ou `--advanced`) sont placés dans `dashboards/` au format `.html` et `.png`.
+Les résultats sont organisés comme suit :
+- **`models_saved/`** : Contient les fichiers `.keras`, les scalers `.pkl` et les rapports JSON de performances.
+- **`dashboards/`** : Rapports visuels interactifs au format `.html`.
+- **`logs/`** : Historique détaillé des opérations et erreurs.
 
 ---
 
 ## 🧪 Tests
 
-Exécutez la suite de tests pour valider l’intégrité du projet :
+Pour garantir la stabilité, lancez la suite de tests :
 ```bash
+# Lancer tous les tests
 python -m unittest discover tests
+
+# Test spécifique des imports
+python trading_algo/test_imports.py
 ```
-Ou lancez des scripts de test individuels :
+
+---
+
+## Web Dashboard
+
+Le projet inclut une interface Dash pour la visualisation et le contrôle du terminal de trading.
+
+### Démarrage local
+1. Créez et activez un environnement virtuel :
 ```bash
-python test_imports.py
-python test_dashboard.py
+python -m venv .venv
+source .venv/bin/activate  # macOS / Linux
+.\.venv\Scripts\activate   # Windows PowerShell
 ```
+
+2. Installez les dépendances :
+```bash
+pip install -r requirements.txt
+```
+
+3. Variables d'environnement utiles :
+
+- `DEBUG` : `True` ou `False` (par défaut `True` si non défini)
+- `WEB_HOST` : adresse d'écoute (par défaut `127.0.0.1`)
+- `WEB_PORT` : port du serveur (par défaut `8050`)
+- `REDIS_URL` / `REDIS_URI` : URL Redis (optionnel) pour le cache
+
+4. Lancer l'application :
+```bash
+python start.py
+# ou
+python -m trading_algo.web_dashboard.app
+```
+
+Le dashboard sera accessible à `http://{WEB_HOST}:{WEB_PORT}`.
+
+### Points d'attention / Dépannage
+- Si les onglets n'apparaissent pas : vérifier les logs du serveur pour des erreurs d'import au démarrage (modules lourds comme TensorFlow peuvent planter l'import des callbacks). Utiliser le journal pour identifier le module fautif.
+- Messages d'avertissement React (ex: `defaultProps`) provenant de bibliothèques (dash-bootstrap-components) sont généralement sans gravité.
+- Vérifier `assets/` et `assets/custom.css` si le style masque des composants (ex. `display: none` sur `.nav` ou `.tab`).
+- Pour debug côté client : ouvrir DevTools → Network → filtrer `/_dash-layout` et `/_dash-update-component` pour voir les réponses 500 et le message d'erreur Python.
+
+### Configuration du scheduler
+- Intervalle de rafraîchissement configurable via `MARKET_REFRESH_INTERVAL_MIN` dans `trading_algo.settings`.
+- En production, préférez un worker séparé (Celery/Redis) pour éviter le blocage du process web.
 
 ---
 
 ## 🤝 Contribution
 
-Les contributions sont les bienvenues !  
-1. Forkez le projet  
-2. Créez une branche (`git checkout -b feature/amazing-idea`)  
-3. Committez vos changements (`git commit -m 'Add some amazing idea'`)  
-4. Pushez (`git push origin feature/amazing-idea`)  
-5. Ouvrez une Pull Request  
-
-Merci de respecter les conventions PEP8 et d’ajouter des tests pour toute nouvelle fonctionnalité.
+1. Forkez le dépôt.
+2. Créez votre branche : `git checkout -b feature/nom-de-la-feature`.
+3. Assurez-vous que votre code respecte la norme **PEP8**.
+4. Ouvrez une Pull Request.
 
 ---
 
 ## 📄 Licence
 
-Ce projet est sous licence **MIT**. Vous êtes libre de l’utiliser, le modifier et le distribuer, sous réserve de conserver la notice de droit d’auteur.  
-Voir le fichier [LICENSE](LICENSE) pour plus de détails.
+Distribué sous licence **MIT**. Voir `LICENSE` pour plus d'informations.
 
 ---
 
-## 🙏 Remerciements
-
-- [yfinance](https://github.com/ranaroussi/yfinance) pour l’accès aux données boursières
-- [TensorFlow / Keras](https://www.tensorflow.org/) pour les modèles LSTM
-- [scikit-learn](https://scikit-learn.org/) pour les régresseurs classiques
-- [Plotly Dash](https://plotly.com/dash/) pour la visualisation interactive
-- [CatBoost](https://catboost.ai/) pour le gradient boosting
-
----
-
-**Développé avec ❤️ par Marc Lamoureux**  
-🔗 [https://github.com/lamoureuxmarcqc](https://github.com/lamoureuxmarcqc)
-```
-
-**Principales modifications apportées :**
-- Structure du projet mise à jour : `trading_algo/` à la racine, plus de dossier `src/`.
-- Installation : utilisation de `pip install -e .` (via `pyproject.toml`), création du fichier `.env`.
-- Commande `trading-algo` expliquée avec des exemples concrets.
-- Options de configuration dans `.env` listées.
-- Mise à jour des chemins de sauvegarde (`models_saved/`, `dashboards/`).
-
-Ce README correspond désormais à l’état actuel du projet.
+**Développé avec ❤️ par Marc Lamoureux** 🔗 [GitHub Profile](https://github.com/lamoureuxmarcqc)

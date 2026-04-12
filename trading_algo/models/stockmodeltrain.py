@@ -562,112 +562,120 @@ class StockModelTrain:
         except Exception as e:
             logger.error(f"Erreur lors de l'entraînement: {e}", exc_info=True)
             return False
-
-    # Ajoutez cette méthode dans la classe StockModelTrain (par exemple juste avant def export_training_data)
-    def train_on_arrays(self,
-                        X_train: np.ndarray,
-                        y_train: np.ndarray,
-                        X_val: Optional[np.ndarray] = None,
-                        y_val: Optional[np.ndarray] = None,
-                        epochs: int = 50,
-                        batch_size: int = 32,
-                        model_dir: Optional[str] = None,
+    def train_on_arrays(self, 
+                        X_train: np.ndarray, 
+                        y_train: np.ndarray, 
+                        X_val: Optional[np.ndarray] = None, 
+                        y_val: Optional[np.ndarray] = None, 
+                        epochs: int = 50, 
+                        batch_size: int = 32, 
+                        model_dir: Optional[str] = None, 
                         callbacks: Optional[List[Any]] = None) -> Any:
         """
-        Entraîne le modèle à partir de tableaux numpy pré-préparés (float32).
-        Conserve les conventions et la sauvegarde de StockModelTrain.train().
+        Entraîne le modèle à partir de tableaux numpy pré-préparés.
+        Idéal pour le transfert d'apprentissage ou les datasets chargés en mémoire.
         """
         try:
-            # Sanity / casting
-            X_train = X_train.astype(np.float32)
-            y_train = y_train.astype(np.float32)
-            if X_val is not None:
-                X_val = X_val.astype(np.float32)
-            if y_val is not None:
-                y_val = y_val.astype(np.float32)
+            # Casting en float32 pour la compatibilité TensorFlow
+            X_train, y_train = X_train.astype(np.float32), y_train.astype(np.float32)
+            if X_val is not None: X_val = X_val.astype(np.float32)
+            if y_val is not None: y_val = y_val.astype(np.float32)
 
-            # Configuration par défaut des callbacks si non fournis
             cb = callbacks or []
             cb += [
                 tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=self.patience_early_stopping, restore_best_weights=True),
                 tf.keras.callbacks.ReduceLROnPlateau(monitor="val_loss", patience=max(3, self.patience_early_stopping//4), factor=0.2)
             ]
 
-            # Build model (réutiliser base_model.ImprovedLSTMPredictorMultiOutput)
-            n_features = X_train.shape[2]
-            n_outputs = y_train.shape[1]
-            # Use similar architecture choices as train()
+            # Architecture similaire à la méthode train() standard
+            n_features, n_outputs = X_train.shape[2], y_train.shape[1]
             model = ImprovedLSTMPredictorMultiOutput(
-                lstm_units1=64,
-                lstm_units2=32,
-                lstm_units3=16,
-                dense_units=64,
-                dropout_rate=0.3,
-                recurrent_dropout=0.2,
-                l2_reg=0.001,
-                n_outputs=n_outputs
+                lstm_units1=64, lstm_units2=32, lstm_units3=16,
+                dense_units=64, dropout_rate=0.3, recurrent_dropout=0.2,
+                l2_reg=0.001, n_outputs=n_outputs
             )
-            optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
-            model.compile(optimizer=optimizer, loss="huber", metrics=["mae", "mse"])
+            
+            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), loss="huber", metrics=["mae", "mse"])
 
-            # Fit
             history = model.fit(
                 X_train, y_train,
                 validation_data=(X_val, y_val) if (X_val is not None and y_val is not None) else None,
-                epochs=epochs,
-                batch_size=batch_size,
-                callbacks=cb,
-                shuffle=True,
-                verbose=1
+                epochs=epochs, batch_size=batch_size, callbacks=cb, shuffle=True, verbose=1
             )
 
-            # Assign and save model & metadata
             self.model = model
-            if model_dir is None:
-                model_dir = f"models_saved/{self.symbol or 'batch'}"
-            os.makedirs(model_dir, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            model_path = os.path.join(model_dir, f"model_{ts}.keras")
-            model.save(model_path)
-            # Save scalers if present on self
-            try:
-                with open(os.path.join(model_dir, f"feature_scaler_{ts}.pkl"), "wb") as f:
-                    pickle.dump(self.feature_scaler, f)
-                with open(os.path.join(model_dir, f"target_scaler_{ts}.pkl"), "wb") as f:
-                    pickle.dump(self.target_scaler, f)
-            except Exception:
-                logger.debug("Impossible de sauvegarder les scalers (debug).")
-
-            logger.info(f"Model entraîné et sauvegardé: {model_path}")
+            self._save_model_and_scalers(model, model_dir)
             return history
 
         except Exception as e:
             logger.error(f"Erreur train_on_arrays: {e}", exc_info=True)
             raise
-    
+
     def validate_on_test(self, X_test_seq, y_test_seq):
-        """
-        Compare les prédictions du modèle sur l'ensemble de test avec les valeurs réelles.
-        X_test_seq : séquences d'entrée pour le test (shape: nb_seq, lookback, n_features)
-        y_test_seq : cibles correspondantes (shape: nb_seq, n_targets)
-        """
+        """Évalue les performances réelles sur l'ensemble de test (Données inversées)"""
         if self.model is None:
             logger.error("Modèle non entraîné")
             return
         
         y_pred_scaled = self.model.predict(X_test_seq, verbose=0)
         y_pred = self.target_scaler.inverse_transform(y_pred_scaled)
-        y_true = self.target_scaler.inverse_transform(y_test_seq) # y_test_seq est déjà scaled
+        y_true = self.target_scaler.inverse_transform(y_test_seq)
         
         logger.info("=== Validation sur données de test ===")
         for i, col in enumerate(self.target_columns):
-            if 'Target_Close' in col: # On se concentre sur les prix de clôture futurs
+            if 'Target_Close' in col:
                 mae = np.mean(np.abs(y_pred[:, i] - y_true[:, i]))
                 logger.info(f"MAE pour {col} : {mae:.2f}")
-                # Afficher les 3 premiers exemples
-                for j in range(min(3, len(y_pred))):
-                    logger.info(f" Exemple {j}: prédit={y_pred[j, i]:.2f}, réel={y_true[j, i]:.2f}")
+                for j in range(min(2, len(y_pred))):
+                    logger.info(f"  Exemple {j}: Prédit={y_pred[j, i]:.2f}, Réel={y_true[j, i]:.2f}")
+
+    def _save_model_and_scalers(self, model, model_dir):
+        """Utilitaire de sauvegarde centralisé"""
+        if model_dir is None:
+            model_dir = f"models_saved/{self.symbol or 'batch'}"
+        os.makedirs(model_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        model.save(os.path.join(model_dir, f"model_{ts}.keras"))
+        try:
+            with open(os.path.join(model_dir, f"feature_scaler_{ts}.pkl"), "wb") as f:
+                pickle.dump(self.feature_scaler, f)
+            with open(os.path.join(model_dir, f"target_scaler_{ts}.pkl"), "wb") as f:
+                pickle.dump(self.target_scaler, f)
+            logger.info(f"Modèle et scalers sauvegardés dans {model_dir}")
+        except Exception as e:
+            logger.debug(f"Erreur sauvegarde scalers: {e}")
+
+    # --- MÉTHODES GÉNÉRATEUR (Pour le Big Data / Multi-actions) ---
+
+    @staticmethod
+    def combined_data_generator(collected, common_feature_cols, common_target_cols, 
+                                feature_scaler, target_scaler, lookback_days, batch_size):
+        """Générateur infini pour model.fit()"""
+        scaled_map = {}
+        for sym, data in collected.items():
+            X_df = data['features'][common_feature_cols].ffill().bfill().fillna(0)
+            y_df = data['targets'][common_target_cols].ffill().bfill().fillna(0)
+            if len(X_df) > lookback_days:
+                scaled_map[sym] = (
+                    feature_scaler.transform(X_df.values).astype(np.float32),
+                    target_scaler.transform(y_df.values).astype(np.float32)
+                )
+
+        while True:
+            for sym, (X_s, y_s) in scaled_map.items():
+                for i in range(lookback_days, len(X_s), batch_size):
+                    end = min(i + batch_size, len(X_s))
+                    batch_X, batch_y = [], []
+                    for j in range(i, end):
+                        batch_X.append(X_s[j-lookback_days:j])
+                        batch_y.append(y_s[j])
+                    if batch_X:
+                        yield np.array(batch_X), np.array(batch_y)
+    # Ajoutez cette méthode dans la classe StockModelTrain (par exemple juste avant def export_training_data)
+
     
+   
     def _save_metrics(self, metrics: Dict[str, Any], save_dir: str):
         """Sauvegarde les métriques d'entraînement"""
         try:

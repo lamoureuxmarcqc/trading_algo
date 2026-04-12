@@ -17,6 +17,7 @@ API disponibles:
 - Financial Modeling Prep: Données fondamentales
 - Polygon.io: Données boursières premium
 - Statistique Canada: Données macroéconomiques Canada
+- FED
 '''
 
 import yfinance as yf
@@ -37,85 +38,7 @@ warnings.filterwarnings('ignore')
 # Do not configure logging here. The application entrypoint must call init_logging().
 logger = logging.getLogger(__name__)
 
-# --- additions near top of file (after imports) ---
-import time
-
 # persistent mapping: requested_symbol -> resolved_candidate
-_SYMBOL_RESOLUTION_CACHE_FILE = os.path.join(os.getcwd(), "cache", "symbol_resolution.json")
-_SYMBOL_RESOLUTION_CACHE: Dict[str, str] = {}
-
-# negative cache to avoid retrying repeatedly for symbols that failed resolution
-_SYMBOL_NEGATIVE_CACHE_FILE = os.path.join(os.getcwd(), "cache", "symbol_resolution_negative.json")
-_SYMBOL_NEGATIVE_CACHE: Dict[str, float] = {}
-_NEGATIVE_CACHE_TTL = 24 * 3600  # seconds to keep negative entry (24h)
-
-
-def _load_symbol_resolution_cache():
-    global _SYMBOL_RESOLUTION_CACHE
-    try:
-        os.makedirs(os.path.dirname(_SYMBOL_RESOLUTION_CACHE_FILE), exist_ok=True)
-        if os.path.exists(_SYMBOL_RESOLUTION_CACHE_FILE):
-            with open(_SYMBOL_RESOLUTION_CACHE_FILE, "r", encoding="utf-8") as f:
-                _SYMBOL_RESOLUTION_CACHE = json.load(f) or {}
-                if not isinstance(_SYMBOL_RESOLUTION_CACHE, dict):
-                    _SYMBOL_RESOLUTION_CACHE = {}
-    except Exception as e:
-        logger.debug(f"Could not load symbol resolution cache: {e}")
-        _SYMBOL_RESOLUTION_CACHE = {}
-
-
-def _save_symbol_resolution_cache():
-    try:
-        os.makedirs(os.path.dirname(_SYMBOL_RESOLUTION_CACHE_FILE), exist_ok=True)
-        with open(_SYMBOL_RESOLUTION_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(_SYMBOL_RESOLUTION_CACHE, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.debug(f"Could not save symbol resolution cache: {e}")
-
-
-def _load_negative_cache():
-    global _SYMBOL_NEGATIVE_CACHE
-    try:
-        os.makedirs(os.path.dirname(_SYMBOL_NEGATIVE_CACHE_FILE), exist_ok=True)
-        if os.path.exists(_SYMBOL_NEGATIVE_CACHE_FILE):
-            with open(_SYMBOL_NEGATIVE_CACHE_FILE, "r", encoding="utf-8") as f:
-                _SYMBOL_NEGATIVE_CACHE = json.load(f) or {}
-                if not isinstance(_SYMBOL_NEGATIVE_CACHE, dict):
-                    _SYMBOL_NEGATIVE_CACHE = {}
-    except Exception as e:
-        logger.debug(f"Could not load negative symbol cache: {e}")
-        _SYMBOL_NEGATIVE_CACHE = {}
-
-
-def _save_negative_cache():
-    try:
-        os.makedirs(os.path.dirname(_SYMBOL_NEGATIVE_CACHE_FILE), exist_ok=True)
-        with open(_SYMBOL_NEGATIVE_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(_SYMBOL_NEGATIVE_CACHE, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.debug(f"Could not save negative symbol cache: {e}")
-
-
-# load caches at module import
-_load_symbol_resolution_cache()
-_load_negative_cache()
-
-
-def _is_recently_negative(symbol: str) -> bool:
-    ts = _SYMBOL_NEGATIVE_CACHE.get(symbol)
-    if not ts:
-        return False
-    return (time.time() - float(ts)) < _NEGATIVE_CACHE_TTL
-
-
-def _mark_negative(symbol: str) -> None:
-    _SYMBOL_NEGATIVE_CACHE[symbol] = time.time()
-    _save_negative_cache()
-
-
-# -- Symbol Resolution Cache ----------------------------------------------------
-# persistent mapping: requested_symbol -> resolved_candidate
-# stored at <repo-root>/cache/symbol_resolution.json
 _SYMBOL_RESOLUTION_CACHE_FILE = os.path.join(os.getcwd(), "cache", "symbol_resolution.json")
 _SYMBOL_RESOLUTION_CACHE: Dict[str, str] = {}
 
@@ -320,7 +243,9 @@ API_CONFIG = {
     'FINANCIAL_MODELING_PREP': os.getenv('FMP_API_KEY'),
     'POLYGON': os.getenv('POLYGON_API_KEY'),
     'TWITTER_X_BEARER': os.getenv('TWITTER_X_BEARER'),
-    'NY_TIMES': os.getenv('NY_TIMES_API_KEY')
+    'NY_TIMES': os.getenv('NY_TIMES_API_KEY'),
+    'NY_TIMES_API_KEY_SECRET':os.getenv('NY_TIMES_API_KEY_SECRET'),
+    'FRED_API_KEY':os.getenv('FRED_API_KEY')
 }
 
 # Vérification que les clés sont chargées
@@ -331,81 +256,6 @@ for key_name, key_value in API_CONFIG.items():
         logger.warning(f"Clé API suspecte ou démo: {key_name}")
         # Utiliser la valeur 'demo' si la clé est invalide
         API_CONFIG[key_name] = 'demo'
-
-def get_stock_overview(symbol: str) -> Dict[str, Any]:
-    """
-    Obtient un aperçu rapide d'une action en utilisant Yahoo Finance
-    Compatible avec la fonction demandée dans l'interface
-    """
-    try:
-        stock = yf.Ticker(symbol)
-        info = stock.info
-        
-        # Formater les valeurs monétaires
-        def format_market_cap(value):
-            if value is None or value == 'N/A':
-                return 'N/A'
-            try:
-                value = float(value)
-                if value >= 1e12:
-                    return f"${value/1e12:.2f}T"
-                elif value >= 1e9:
-                    return f"${value/1e9:.2f}B"
-                elif value >= 1e6:
-                    return f"${value/1e6:.2f}M"
-                else:
-                    return f"${value:,.2f}"
-            except:
-                return str(value)
-        
-        overview = {
-            'symbol': symbol,
-            'name': info.get('longName', info.get('shortName', 'N/A')),
-            'sector': info.get('sector', 'N/A'),
-            'industry': info.get('industry', 'N/A'),
-            'current_price': info.get('currentPrice', info.get('regularMarketPrice', 'N/A')),
-            'previous_close': info.get('previousClose', 'N/A'),
-            'market_cap': format_market_cap(info.get('marketCap', 'N/A')),
-            'pe_ratio': f"{info.get('trailingPE', 'N/A'):.2f}" if isinstance(info.get('trailingPE'), (int, float)) else 'N/A',
-            'forward_pe': f"{info.get('forwardPE', 'N/A'):.2f}" if isinstance(info.get('forwardPE'), (int, float)) else 'N/A',
-            'dividend_yield': f"{info.get('dividendYield', 0)*100:.2f}%" if info.get('dividendYield') else '0.00%',
-            'beta': info.get('beta', 'N/A'),
-            '52_week_high': info.get('fiftyTwoWeekHigh', 'N/A'),
-            '52_week_low': info.get('fiftyTwoWeekLow', 'N/A'),
-            'volume': info.get('volume', 'N/A'),
-            'avg_volume': info.get('averageVolume', 'N/A'),
-            'currency': info.get('currency', 'USD'),
-            'exchange': info.get('exchange', 'N/A'),
-            'country': info.get('country', 'N/A')
-        }
-        
-        logger.info(f"Aperçu récupéré pour {symbol}")
-
-        return overview
-        
-    except Exception as e:
-        logger.error(f"Erreur get_stock_overview pour {symbol}: {e}")
-        return {
-            'symbol': symbol,
-            'name': 'N/A',
-            'sector': 'N/A',
-            'industry': 'N/A',
-            'current_price': 'N/A',
-            'previous_close': 'N/A',
-            'market_cap': 'N/A',
-            'pe_ratio': 'N/A',
-            'forward_pe': 'N/A',
-            'dividend_yield': 'N/A',
-            'beta': 'N/A',
-            '52_week_high': 'N/A',
-            '52_week_low': 'N/A',
-            'volume': 'N/A',
-            'avg_volume': 'N/A',
-            'currency': 'USD',
-            'exchange': 'N/A',
-            'country': 'N/A'
-        }
-
 
 class StockDataExtractor:
     """
@@ -428,6 +278,44 @@ class StockDataExtractor:
             logger.info(f"Cache initialisé dans: {self.cache_dir}")
         self.cache = {}
 
+    def get_bulk_prices(self, tickers: List[str]) -> Dict[str, float]:
+        """
+        Récupère les derniers prix de clôture pour une liste de tickers en une seule requête.
+        Optimise radicalement le temps de chargement du dashboard.
+        """
+        if not tickers:
+            return {}
+
+        try:
+            # Téléchargement groupé (yfinance supporte les listes séparées par des espaces)
+            data = yf.download(
+                tickers=" ".join(tickers), 
+                period="1d", 
+                interval="1m", # On prend la minute la plus récente
+                group_by='ticker',
+                threads=True,
+                progress=False
+            )
+
+            prices = {}
+            for ticker in tickers:
+                try:
+                    # Extraction du dernier prix 'Close' valide
+                    if len(tickers) > 1:
+                        last_price = data[ticker]['Close'].dropna().iloc[-1]
+                    else:
+                        # Cas particulier si un seul ticker est demandé, yfinance change le format du DF
+                        last_price = data['Close'].dropna().iloc[-1]
+                    
+                    prices[ticker] = float(last_price)
+                except Exception:
+                    prices[ticker] = 0.0 # Valeur par défaut si échec
+            
+            return prices
+
+        except Exception as e:
+            print(f"Erreur lors du bulk fetch: {e}")
+            return {}
    
     def get_historical_data(self, 
                            symbol: str = None, 
@@ -569,7 +457,31 @@ class StockDataExtractor:
             }
         except:
             return {}    
-
+    def get_full_ticker_data(self, symbol: str, period="3y"):
+        """Récupère prix + fondamentaux et prépare le format JSON."""
+        try:
+            # 1. Récupération des prix (ton code actuel)
+            history = self.get_historical_data(symbol, period=period) 
+            
+            # 2. Récupération des fondamentaux
+            fundamentals = self.get_fundamental_data_fallback(symbol)
+            
+            # 3. Fusion pour le cache
+            payload = {
+                'symbol': symbol,
+                'last_updated': datetime.now().isoformat(),
+                'profile': fundamentals.get('profile', {}),
+                'ratios': fundamentals.get('ratios', {}),
+                'history': {
+                    'dates': history.index.strftime('%Y-%m-%d').tolist(),
+                    'closes': history['Close'].tolist(),
+                    'volumes': history['Volume'].tolist()
+                }
+            }
+            return payload
+        except Exception as e:
+            logger.error(f"Erreur extraction complète pour {symbol}: {e}")
+            return None
     def get_sentiment_from_x(self, symbol: str = None) -> Dict[str, Any]:
         """
         Récupère le sentiment depuis X (Twitter)
@@ -1235,24 +1147,99 @@ class StockDataExtractor:
         except Exception as e:
             logger.error(f"Erreur create_target_columns: {e}")
             return pd.DataFrame()
-    
+    def _compute_market_health_score(self, market_data: Dict) -> float:
+
+        components = []
+
+        # -------------------------
+        # 1. VIX (20%)
+        # -------------------------
+        vix = market_data.get('VIX', {}).get('price')
+        if vix is not None:
+            vix_score = max(0, min(100, (30 - vix) / 15 * 100))
+            components.append(vix_score * 0.20)
+
+        # -------------------------
+        # 2. Put/Call (15%)
+        # -------------------------
+        put_call = market_data.get('Equity Put/Call Ratio', {}).get('price')
+        if put_call is not None:
+            put_call_score = max(0, min(100, (1.2 - put_call) / 1.2 * 100))
+            components.append(put_call_score * 0.15)
+
+        # -------------------------
+        # 3. Breadth (15%)
+        # -------------------------
+        adv_decl = market_data.get('NYSE Advance/Decline Line', {})
+        if adv_decl:
+            change_adv = adv_decl.get('change', 0)
+            breadth_score = max(0, min(100, 50 + change_adv))
+            components.append(breadth_score * 0.15)
+
+        # -------------------------
+        # 4. Indices (30%)
+        # -------------------------
+        indices = ['S&P 500', 'NASDAQ', 'Dow Jones']
+        perf_scores = []
+
+        for idx in indices:
+            change = market_data.get(idx, {}).get('change')
+            if change is not None:
+                score = max(0, min(100, 50 + change * 25))
+                perf_scores.append(score)
+
+        if perf_scores:
+            components.append(np.mean(perf_scores) * 0.30)
+
+        # -------------------------
+        # 5. Sectors (20%)
+        # -------------------------
+        sectors = market_data.get('sectors', {})
+        if sectors:
+            positive = sum(1 for s in sectors.values() if s.get('change', 0) > 0)
+            sector_score = (positive / len(sectors)) * 100
+            components.append(sector_score * 0.20)
+
+        # -------------------------
+        # FINAL SCORE
+        # -------------------------
+        if not components:
+            return 50.0
+
+        score = sum(components)
+
+        return max(0, min(100, score))   
     def get_market_indicators(self) -> Dict[str, Any]:
         """
-        Récupère les indicateurs de marché globaux (indices majeurs).
-        This implementation is robust to empty/None responses from yfinance.
+        Récupère les indicateurs de marché globaux (indices majeurs + breadth + volatilité + sentiment).
+        Retourne un dictionnaire contenant les données et un score composite.
         """
         try:
-            indices = {
+            # Liste des symboles à surveiller
+            market_symbols = {
                 'S&P 500': '^GSPC',
                 'NASDAQ': '^IXIC',
                 'Dow Jones': '^DJI',
                 'VIX': '^VIX',
                 'Russell 2000': '^RUT',
-                'TSX Composite': '^GSPTSE'
+                'TSX Composite': '^GSPTSE',
+                # Indices de largeur de marché (breadth) – disponibles chez Yahoo
+                'NYSE Advance/Decline Line': '^NYAD',      # ligne A/D
+                'Equity Put/Call Ratio': '^CPCE',          # ratio put/call équité
             }
-            
+
+            # ETFs sectoriels pour observer les rotations
+            sector_etfs = {
+                'Financials (XLF)': 'XLF',
+                'Energy (XLE)': 'XLE',
+                'Health Care (XLV)': 'XLV',
+                'Technology (XLK)': 'XLK',
+                'Consumer Discretionary (XLY)': 'XLY'
+            }
+
             market_data = {}
-            for name, symbol in indices.items():
+            # Récupération des indices
+            for name, symbol in market_symbols.items():
                 try:
                     hist = _yf_history_with_fallback(symbol, period='5d', interval='1d')
                     if not isinstance(hist, pd.DataFrame) or hist.empty or 'Close' not in hist.columns:
@@ -1269,25 +1256,41 @@ class StockDataExtractor:
                 except Exception as e:
                     logger.warning(f"Erreur pour {name}: {e}")
                     continue
-            
-            # Calculer le sentiment global uniquement à partir des entrées valides
-            if market_data:
-                positive = sum(1 for data in market_data.values() if isinstance(data, dict) and data.get('change', 0) > 0)
-                total = len([d for d in market_data.values() if isinstance(d, dict)])
-                sentiment_score = (positive / total * 100) if total > 0 else 50
-                
-                market_data['overall_sentiment'] = {
-                    'score': sentiment_score,
-                    'label': 'Bullish' if sentiment_score > 60 else 'Bearish' if sentiment_score < 40 else 'Neutral',
-                    'description': 'Haussier' if sentiment_score > 60 else 'Baissier' if sentiment_score < 40 else 'Neutre'
-                }
-            
-            return market_data
-            
-        except Exception as e:
-            logger.error(f"Erreur get_market_indicators: {e}")
-            return {}
 
+            # Récupération des ETFs sectoriels
+            sector_data = {}
+            for name, symbol in sector_etfs.items():
+                try:
+                    hist = _yf_history_with_fallback(symbol, period='5d', interval='1d')
+                    if not isinstance(hist, pd.DataFrame) or hist.empty or 'Close' not in hist.columns:
+                        continue
+                    current = float(hist['Close'].iloc[-1])
+                    previous = float(hist['Close'].iloc[-2]) if len(hist) > 1 else current
+                    change_pct = ((current - previous) / previous * 100) if previous != 0 else 0
+                    sector_data[name] = {
+                        'price': current,
+                        'change': change_pct,
+                        'status': '🟢' if change_pct > 0 else '🔴' if change_pct < 0 else '⚪'
+                    }
+                except Exception:
+                    pass
+
+            market_data['sectors'] = sector_data
+
+            # Calcul du score de santé du marché
+            health_score = self._compute_market_health_score(market_data)
+            market_data['overall_sentiment'] = {
+                'score': health_score,
+                'label': 'Bullish' if health_score > 70 else 'Bearish' if health_score < 30 else 'Neutral',
+                'description': 'Haussier' if health_score > 70 else 'Baissier' if health_score < 30 else 'Neutre',
+                'score_out_of_100': health_score
+            }
+
+            return market_data
+
+        except Exception as e:
+            logger.error(f"Erreur get_market_indicators: {e}", exc_info=True)
+            return {}
     def get_all_data(self,
                      symbol: str = None,
                      period: str = "1y") -> Dict[str, Any]:
@@ -1534,29 +1537,66 @@ class StockDataExtractor:
         extractor = StockDataExtractor()
         return extractor.get_market_indicators()
 
+    def get_market_health_score(self, market_data: Dict) -> float:
+        return self._compute_market_health_score(market_data)
+
+    def evaluate_market_health(self) -> Dict[str, Any]:
+        """
+        Évalue la santé du marché et retourne un résumé avec score et analyse.
+        """
+        try:
+            indicators = self.get_market_indicators()
+            if not indicators:
+                return {'error': 'Impossible de récupérer les indicateurs de marché'}
+
+            health_score = indicators.get('overall_sentiment', {}).get('score_out_of_100', 50)
+            analysis = {
+                'score': health_score,
+                'rating': indicators['overall_sentiment']['label'],
+                'description': indicators['overall_sentiment']['description'],
+                'vix': indicators.get('VIX', {}).get('price'),
+                'put_call_ratio': indicators.get('Equity Put/Call Ratio', {}).get('price'),
+                'advance_decline': indicators.get('NYSE Advance/Decline Line', {}).get('change'),
+                'indices': {
+                    'sp500': indicators.get('S&P 500', {}).get('change'),
+                    'nasdaq': indicators.get('NASDAQ', {}).get('change'),
+                    'dow': indicators.get('Dow Jones', {}).get('change')
+                },
+                'sectors': {name: data.get('change', 0) for name, data in indicators.get('sectors', {}).items()}
+            }
+            return analysis
+        except Exception as e:
+            logger.error(f"Erreur evaluate_market_health: {e}")
+            return {'error': str(e)}
+
 # Insert this class definition above the existing `def get_market_sentiment(self) -> Dict[str, Any]:`
 # (i.e. before line that currently reads `def get_market_sentiment(self) -> Dict[str, Any]:`)
 class MacroDataExtractor:
     """
+    Extracteur de données macroéconomiques intégrant Statistique Canada (WDS) 
+    et Yahoo Finance pour les indicateurs globaux.
     Extracteur de données macroéconomiques.
     Fournit des wrappers robustes autour de yfinance et StatCan.
+    class MacroDataExtractor:
+    
+    Extraction de données macro pertinentes pour les scénarios Fed / secteurs.
+    Inclut FRED + Statistique Canada.
     """
+    
     def __init__(self):
         self.cache = {}
         self.cache_duration = timedelta(hours=6)
+        self.FRED_API_KEY = os.getenv("FRED_API_KEY")
+        self.fred_base_url = "https://api.stlouisfed.org/fred/series/observations"
+        self.logger = logging.getLogger(__name__)
         logger.info("MacroDataExtractor initialisé")
+        self.cache_duration = timedelta(hours=6)
 
     @staticmethod
-    def statistique_canada_sdw(method: str, params: Dict = None) -> Optional[Dict]:
+    def statistique_canada_sdw(method: str, params: Dict = None) -> Optional[Any]:
         """
         Accède aux données de Statistique Canada Web Data Service (WDS).
-        Méthode simple, retourne None en cas d'erreur.
-        This implementation uses HTTP POST with a JSON body when required by the WDS.
-        For `getDataFromVectorsAndLatestNPeriods` pass `params` with either:
-          - 'vectorIds' : "v12345" or "v12345,v67890" or a list of ids
-          - optional 'latestN' : integer (number of latest points)
-
-        Returns the parsed JSON on success or None on error.
+        IMPORTANT: Méthode statique sans 'self' pour éviter les erreurs de signature.
         """
         supported_methods = [
             'getDataFromCubePidCoordAndLatestNPeriods',
@@ -1565,145 +1605,125 @@ class MacroDataExtractor:
             'getCubeMetadata',
             'getSeriesInfoFromVector'
         ]
-        
+    
         if method not in supported_methods:
-            raise ValueError(f"Méthode non supportée. Méthodes: {supported_methods}")
-        
+            logging.error(f"StatCan: Méthode '{method}' non supportée.")
+            return None
+    
         base_url = "https://www150.statcan.gc.ca/t1/wds/rest"
         url = f"{base_url}/{method}"
-        
+    
         try:
             headers = {'Content-Type': 'application/json'}
+            payload = []
 
-            # Build payload for the specific method that requires POST with JSON array
-            payload = None
+            # Préparation spécifique pour la méthode de récupération par vecteurs
             if method == 'getDataFromVectorsAndLatestNPeriods':
-                # Accept several possible shapes for vector ids:
-                # params['vectorIds'] may be "v65201210" or "v1,v2" or a list; support 'latestN' as well
-                vector_ids = None
-                latest_n = None
-                if params:
-                    vector_ids = params.get('vectorIds') or params.get('vectorId') or params.get('vector_id')
-                    latest_n = params.get('latestN') or params.get('latest_n')
-
-                payload = []
-                if vector_ids:
-                    if isinstance(vector_ids, (list, tuple)):
-                        vecs = vector_ids
-                    else:
-                        # split comma separated string and strip 'v' prefix if present
-                        vecs = [v.strip() for v in str(vector_ids).split(',') if v.strip()]
-
-                    for v in vecs:
-                        # Extract digits from possible 'vXXXXX' token
-                        vnum = ''.join(ch for ch in str(v) if ch.isdigit())
-                        if not vnum:
-                            continue
-                        entry = {"vectorId": int(vnum)}
-                        if latest_n:
-                            try:
-                                entry["latestN"] = int(latest_n)
-                            except Exception:
-                                entry["latestN"] = latest_n
-                        payload.append(entry)
-
-                # If no vector IDs provided, but params looks already like payload, send it
-                if not payload and params:
-                    # attempt to send params as-is (caller may supply proper body)
-                    payload = params
-
+                vector_ids = params.get('vectorIds') or params.get('vectorId') or []
+                latest_n = params.get('latestN') or 1
+                
+                if not isinstance(vector_ids, (list, tuple)):
+                    vector_ids = [v.strip() for v in str(vector_ids).split(',') if v.strip()]
+                
+                for v in vector_ids:
+                    # Extraction du numérique uniquement (ex: v62305755 -> 62305755)
+                    v_digits = ''.join(filter(str.isdigit, str(v)))
+                    if v_digits:
+                        payload.append({
+                            "vectorId": int(v_digits), 
+                            "latestN": int(latest_n)
+                        })
             else:
-                # For other methods the API supports POST with a body as well; send params as JSON
                 payload = params or {}
 
-            # Perform POST (WDS expects JSON body)
+            if not payload and method == 'getDataFromVectorsAndLatestNPeriods':
+                return None
+
             response = requests.post(url, headers=headers, json=payload, timeout=15)
             response.raise_for_status()
-
-            # The service may return a list or a dict; return parsed JSON
             return response.json()
 
-        except requests.exceptions.HTTPError as e:
-            # Log HTTP error and response text when available
-            resp_text = getattr(e.response, 'text', None)
-            logger.error(f"Erreur Statistique Canada API ({method}): {e} - response: {resp_text}")
-            return None
         except Exception as e:
-            logger.error(f"Erreur Statistique Canada API ({method}): {e}")
+            logging.error(f"Erreur API Statistique Canada ({method}): {e}")
             return None
 
     def get_economic_indicators(self, country: str = "US") -> Dict[str, Any]:
         """
-        Récupère des indicateurs économiques essentiels pour `country`.
-        Retourne dictionnaire vide en cas d'erreur.
+        Récupère les indicateurs économiques (PIB, Taux, Volatilité, etc.)
         """
-        cache_key = f"economic_{country}_{datetime.now().strftime('%Y-%m-%d')}"
-        # simple cache usage
+        now = datetime.now()
+        cache_key = f"macro_{country}_{now.strftime('%Y-%m-%d')}"
+        
+        # Gestion du cache interne
         if cache_key in self.cache:
             cache_time, data = self.cache[cache_key]
-            if datetime.now() - cache_time < self.cache_duration:
-                logger.info(f"Utilisation cache indicateurs économiques {country}")
+            if now - cache_time < self.cache_duration:
                 return data
 
         indicators: Dict[str, Any] = {}
-        try:
-            if country == "CA":
-                # Example: attempt StatCan vector (best-effort)
-                try:
-                    params = {
-                        'vectorIds': 'v65201210',  # exemple
-                        'startDate': '2020-01-01',
-                        'endDate': datetime.now().strftime('%Y-%m-%d')
-                    }
-                    gdp_data = self.statistique_canada_sdw('getDataFromVectorsAndLatestNPeriods', params)
-                    if gdp_data and 'object' in gdp_data and gdp_data['object']:
-                        latest = gdp_data['object'][0].get('vectorDataPoint', [{}])[0]
-                        indicators['GDP Canada'] = {
-                            'value': latest.get('value'),
-                            'date': latest.get('refPer'),
-                            'growth': latest.get('growthRate'),
-                            'unit': 'CAD',
-                            'source': 'Statistique Canada'
-                        }
-                except Exception as e:
-                    logger.warning(f"Erreur données Canada (StatCan): {e}")
 
-            # US/global indicators via yfinance symbols
-            us_indicators = {
-                '10Y Treasury': '^TNX',
-                '30Y Treasury': '^TYX',
-                'VIX Volatility': '^VIX',
-                'Gold': 'GC=F',
-                'Crude Oil': 'CL=F'
-            }
+        # --- CAS CANADA (Statistique Canada) ---
+        if country == "CA":
+            try:
+                # v62305755 : PIB aux prix de base (Indice)
+                params = {'vectorIds': ['v62305755'], 'latestN': 1}
+                res = self.statistique_canada_sdw('getDataFromVectorsAndLatestNPeriods', params)
+                
+                # StatCan renvoie une liste d'objets (un par vecteur)
+                if res and isinstance(res, list) and len(res) > 0:
+                    vec_obj = res[0]
+                    if vec_obj.get('status') == 'SUCCESS':
+                        data_points = vec_obj.get('object', {}).get('vectorDataPoint', [])
+                        if data_points:
+                            latest = data_points[0]
+                            indicators['GDP Canada'] = {
+                                'value': latest.get('value'),
+                                'date': latest.get('refPer'),
+                                'unit': 'Index (CAD)',
+                                'source': 'Statistique Canada'
+                            }
+            except Exception as e:
+                self.logger.warning(f"Échec extraction PIB Canada: {e}")
 
-            for name, symbol in us_indicators.items():
-                try:
-                    hist = _yf_history_with_fallback(symbol, period='1mo', interval='1d')
-                    if not isinstance(hist, pd.DataFrame) or hist.empty or 'Close' not in hist.columns:
-                        logger.warning(f"Aucune donnée pour indicateur {name} ({symbol})")
-                        continue
-                    current = float(hist['Close'].iloc[-1])
-                    previous = float(hist['Close'].iloc[-2]) if len(hist) > 1 else current
-                    change = ((current - previous) / previous * 100) if previous != 0 else 0
-                    indicators[name] = {
-                        'value': current,
-                        'change': change,
-                        'unit': '%' if 'Treasury' in name else 'USD',
+        # --- INDICATEURS US / GLOBAUX (Yahoo Finance) ---
+        # On utilise ta fonction helper _yf_history_with_fallback pour la robustesse
+        global_map = {
+            '10Y Treasury': '^TNX',
+            'VIX Volatility': '^VIX',
+            'Gold': 'GC=F',
+            'Crude Oil': 'CL=F',
+            'US Dollar Index': 'DX-Y.NYB'
+        }
+
+        for label, sym in global_map.items():
+            try:
+                # Utilisation de ton helper robuste
+                df = _yf_history_with_fallback(sym, period='5d', interval='1d')
+                if not df.empty:
+                    current = float(df['Close'].iloc[-1])
+                    prev = float(df['Close'].iloc[-2]) if len(df) > 1 else current
+                    change = ((current - prev) / prev * 100) if prev != 0 else 0
+                    
+                    indicators[label] = {
+                        'value': round(current, 2),
+                        'change': round(change, 2),
+                        'unit': '%' if 'Treasury' in label else 'USD',
                         'source': 'Yahoo Finance'
                     }
-                except Exception as e:
-                    logger.warning(f"Erreur indicateur {name}: {e}")
-                    continue
+            except Exception as e:
+                self.logger.debug(f"Indicateur {label} non disponible: {e}")
 
-            # cache result
-            self.cache[cache_key] = (datetime.now(), indicators)
-            logger.info(f"Indicateurs économiques {country}: {len(indicators)} récupérés")
-            return indicators
+        if indicators:
+            self.cache[cache_key] = (now, indicators)
+            
+        return indicators
 
-        except Exception as e:
-            logger.error(f"Erreur get_economic_indicators: {e}")
-            return {}
+    def get_all_macro_data(self) -> Dict[str, Any]:
+        """Agrège les données macro US et Canada pour le dashboard."""
+        data_us = self.get_economic_indicators("US")
+        data_ca = self.get_economic_indicators("CA")
+        return {**data_us, **data_ca}
+
 
     def get_commodity_prices(self) -> Dict[str, Any]:
         """Récupère les prix des matières premières en robust manner."""
@@ -1727,11 +1747,11 @@ class MacroDataExtractor:
                     change = ((current - previous) / previous * 100) if previous != 0 else 0
                     prices[name] = {'price': current, 'change': change, 'currency': 'USD'}
                 except Exception as e:
-                    logger.warning(f"Erreur matière première {name}: {e}")
+                    self.logger.warning(f"Erreur matière première {name}: {e}")
                     continue
             return prices
         except Exception as e:
-            logger.error(f"Erreur get_commodity_prices: {e}")
+            self.logger.error(f"Erreur get_commodity_prices: {e}")
             return {}
 
     def get_currency_rates(self) -> Dict[str, Any]:
@@ -1754,12 +1774,36 @@ class MacroDataExtractor:
                     change = ((current - previous) / previous * 100) if previous != 0 else 0
                     rates[pair] = {'rate': current, 'change': change}
                 except Exception as e:
-                    logger.warning(f"Erreur devise {pair}: {e}")
+                    self.logger.warning(f"Erreur devise {pair}: {e}")
                     continue
             return rates
         except Exception as e:
-            logger.error(f"Erreur get_currency_rates: {e}")
+            self.logger.error(f"Erreur get_currency_rates: {e}")
             return {}
+
+    def get_fred_series(self, series_id: str, start_date="2000-01-01") -> pd.DataFrame:
+        """Télécharge une série FRED (taux, inflation, sentiment, etc.)"""
+        try:
+            params = {
+                "series_id": series_id,
+                "api_key": self.FRED_API_KEY,
+                "file_type": "json",
+                "observation_start": start_date
+            }
+            r = requests.get(self.fred_base_url, params=params, timeout=10)
+
+            if r.status_code != 200:
+                self.logger.warning(f"FRED error {r.status_code} for {series_id}")
+                return pd.DataFrame()
+
+            data = r.json().get("observations", [])
+            df = pd.DataFrame(data)
+            df["value"] = pd.to_numeric(df["value"], errors="coerce")
+            return df[["date", "value"]]
+
+        except Exception as e:
+            self.logger.error(f"Erreur FRED pour {series_id}: {e}")
+            return pd.DataFrame()
 
     def get_all_macro_data(self) -> Dict[str, Any]:
         """Regroupe toutes les données macro en un seul dict."""
@@ -1771,11 +1815,82 @@ class MacroDataExtractor:
                 'commodities': self.get_commodity_prices(),
                 'currencies': self.get_currency_rates()
             }
-            logger.info("Données macroéconomiques complètes récupérées")
+            self.logger.info("Données macroéconomiques complètes récupérées")
             return data
         except Exception as e:
-            logger.error(f"Erreur get_all_macro_data: {e}")
+            self.logger.error(f"Erreur get_all_macro_data: {e}")
             return {'timestamp': datetime.now().isoformat(), 'error': str(e)}
+
+    def get_market_health(self) -> Dict[str, Any]:
+        """
+        Récupère la santé du marché via le StockDataExtractor.
+        """
+        extractor = StockDataExtractor()
+        return extractor.evaluate_market_health()
+
+class SectorPerformanceExtractor:
+    """
+    Compare la performance d’un secteur vs un indice large (ex: S&P500).
+    """
+
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+
+    def get_sector_vs_market(self, sector_symbol: str, market_symbol="^GSPC", period="6mo"):
+        try:
+            sec = yf.Ticker(sector_symbol).history(period=period)
+            mkt = yf.Ticker(market_symbol).history(period=period)
+
+            if sec.empty or mkt.empty:
+                self.logger.warning(f"Données manquantes pour {sector_symbol} ou {market_symbol}")
+                return pd.DataFrame()
+
+            df = pd.DataFrame({
+                "sector": sec["Close"].pct_change().cumsum(),
+                "market": mkt["Close"].pct_change().cumsum()
+            })
+            df["relative"] = df["sector"] - df["market"]
+            return df
+
+        except Exception as e:
+            self.logger.error(f"Erreur sector vs market ({sector_symbol}): {e}")
+            return pd.DataFrame()
+
+class FedScenarioAnalyzer:
+    """
+    Analyse l’impact d’une hausse de taux sur les secteurs clés :
+    - Services financiers (IYG)
+    - REITs (USRT)
+    - Consommation discrétionnaire (XLY)
+    """
+
+    def __init__(self, macro: MacroDataExtractor, sector: SectorPerformanceExtractor):
+        self.macro = macro
+        self.sector = sector
+        self.logger = logging.getLogger(__name__)
+
+    def analyze_rate_hike_scenario(self):
+        try:
+            t2 = self.macro.get_fred_series("DGS2").value.iloc[-1]
+            t10 = self.macro.get_fred_series("DGS10").value.iloc[-1]
+            spread = t10 - t2
+
+            reits = self.sector.get_sector_vs_market("USRT")
+            financials = self.sector.get_sector_vs_market("IYG")
+            discretionary = self.sector.get_sector_vs_market("XLY")
+
+            return {
+                "yield_curve_spread": spread,
+                "reits_relative": reits["relative"].iloc[-1] if not reits.empty else None,
+                "financials_relative": financials["relative"].iloc[-1] if not financials.empty else None,
+                "discretionary_relative": discretionary["relative"].iloc[-1] if not discretionary.empty else None
+            }
+
+        except Exception as e:
+            self.logger.error(f"Erreur analyse Fed: {e}")
+            return {}
+
+
 
 # Fonctions utilitaires
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -1790,6 +1905,8 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return extractor.calculate_technical_indicators(df)
 
 
+
+
 def get_market_sentiment() -> Dict[str, Any]:
     """
     Fonction utilitaire pour obtenir le sentiment de marché
@@ -1797,19 +1914,104 @@ def get_market_sentiment() -> Dict[str, Any]:
     extractor = StockDataExtractor()
     return extractor.get_market_indicators()
 
+def get_stock_overview(symbol: str) -> Dict[str, Any]:
+    """
+    Obtient un aperçu rapide d'une action en utilisant Yahoo Finance
+    Compatible avec la fonction demandée dans l'interface
+    """
+    try:
+        stock = yf.Ticker(symbol)
+        info = stock.info
+        
+        # Formater les valeurs monétaires
+        def format_market_cap(value):
+            if value is None or value == 'N/A':
+                return 'N/A'
+            try:
+                value = float(value)
+                if value >= 1e12:
+                    return f"${value/1e12:.2f}T"
+                elif value >= 1e9:
+                    return f"${value/1e9:.2f}B"
+                elif value >= 1e6:
+                    return f"${value/1e6:.2f}M"
+                else:
+                    return f"${value:,.2f}"
+            except:
+                return str(value)
+        
+        overview = {
+            'symbol': symbol,
+            'name': info.get('longName', info.get('shortName', 'N/A')),
+            'sector': info.get('sector', 'N/A'),
+            'industry': info.get('industry', 'N/A'),
+            'current_price': info.get('currentPrice', info.get('regularMarketPrice', 'N/A')),
+            'previous_close': info.get('previousClose', 'N/A'),
+            'market_cap': format_market_cap(info.get('marketCap', 'N/A')),
+            'pe_ratio': f"{info.get('trailingPE', 'N/A'):.2f}" if isinstance(info.get('trailingPE'), (int, float)) else 'N/A',
+            'forward_pe': f"{info.get('forwardPE', 'N/A'):.2f}" if isinstance(info.get('forwardPE'), (int, float)) else 'N/A',
+            'dividend_yield': f"{info.get('dividendYield', 0)*100:.2f}%" if info.get('dividendYield') else '0.00%',
+            'beta': info.get('beta', 'N/A'),
+            '52_week_high': info.get('fiftyTwoWeekHigh', 'N/A'),
+            '52_week_low': info.get('fiftyTwoWeekLow', 'N/A'),
+            'volume': info.get('volume', 'N/A'),
+            'avg_volume': info.get('averageVolume', 'N/A'),
+            'currency': info.get('currency', 'USD'),
+            'exchange': info.get('exchange', 'N/A'),
+            'country': info.get('country', 'N/A')
+        }
+        
+        logger.info(f"Aperçu récupéré pour {symbol}")
 
-def fetch_stock_data(symbol: str, 
-                    period: str = "1y", 
-                    include_technicals: bool = True) -> Dict[str, Any]:
-    """
-    Fonction simplifiée pour récupérer les données d'une action
-    """
+        return overview
+        
+    except Exception as e:
+        logger.error(f"Erreur get_stock_overview pour {symbol}: {e}")
+        return {
+            'symbol': symbol,
+            'name': 'N/A',
+            'sector': 'N/A',
+            'industry': 'N/A',
+            'current_price': 'N/A',
+            'previous_close': 'N/A',
+            'market_cap': 'N/A',
+            'pe_ratio': 'N/A',
+            'forward_pe': 'N/A',
+            'dividend_yield': 'N/A',
+            'beta': 'N/A',
+            '52_week_high': 'N/A',
+            '52_week_low': 'N/A',
+            'volume': 'N/A',
+            'avg_volume': 'N/A',
+            'currency': 'USD',
+            'exchange': 'N/A',
+            'country': 'N/A'
+        }
+
+
+def fetch_stock_data(symbol: str, period: str = "1y", include_technicals: bool = True) -> Dict[str, Any]:
     extractor = StockDataExtractor(symbol)
     data = extractor.get_all_data(period=period)
     
-    if include_technicals and 'historical' in data and not getattr(data['historical'], 'empty', True):
-        data['technical'] = extractor.calculate_technical_indicators(data['historical'])
-    
+    # Si on a des données historiques
+    if 'historical' in data and isinstance(data['historical'], pd.DataFrame):
+        df = data['historical']
+        
+        # Calcul des indicateurs techniques si demandé
+        if include_technicals:
+            df = extractor.calculate_technical_indicators(df)
+        
+        # --- CRUCIAL POUR LE JSON ---
+        # On convertit le DataFrame en dictionnaire pour le cache
+        data['history_json'] = {
+            'dates': df.index.strftime('%Y-%m-%d').tolist(),
+            'closes': df['Close'].tolist(),
+            'rsi': df['RSI'].tolist() if 'RSI' in df.columns else [],
+            'macd': df['MACD'].tolist() if 'MACD' in df.columns else []
+        }
+        # On peut supprimer le DataFrame original pour alléger le cache JSON
+        del data['historical'] 
+        
     return data
 
 
@@ -1862,5 +2064,10 @@ if __name__ == "__main__":
     macro = MacroDataExtractor()
     us_indicators = macro.get_economic_indicators("US")
     logger.info(f"   Indicateurs US: {len(us_indicators)}")
-    
+    sector = SectorPerformanceExtractor()
+    fed = FedScenarioAnalyzer(macro, sector)
+
+    diagnostic = fed.analyze_rate_hike_scenario()
+    logger.info(diagnostic)
+
     logger.info("\n✅ Tests terminés!")

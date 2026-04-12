@@ -27,7 +27,7 @@ class BatchTrainer:
         symbols: List[str],
         period: str = "20y",
         lookback: int = 60,
-        epochs: int = 30,
+        epochs: int = 50,
         batch_size: int = 64,
         output_dir: str = "models_saved/batch",
         max_symbols: int = 500,
