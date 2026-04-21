@@ -28,7 +28,8 @@ setup(
         "dash-ag-grid>=1.0.0",
         "kaleido>=1.2.0",
         "apscheduler>=1.0.0",
-        "dotenv>=0.0.1"
+        "dotenv>=0.0.1",
+        "seaborn>=0.13.0"
     ],
     python_requires=">=3.8",
     extras_require={

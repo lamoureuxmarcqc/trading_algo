@@ -287,9 +287,19 @@ class StockDataExtractor:
             return {}
 
         try:
+            request_map = {}
+            for ticker in tickers:
+                resolved = _SYMBOL_RESOLUTION_CACHE.get(ticker)
+                if resolved:
+                    request_map[ticker] = resolved
+                elif "." in ticker and not ticker.upper().endswith(".TO"):
+                    request_map[ticker] = ticker.replace(".", "-")
+                else:
+                    request_map[ticker] = ticker
+
             # Téléchargement groupé (yfinance supporte les listes séparées par des espaces)
             data = yf.download(
-                tickers=" ".join(tickers), 
+                tickers=" ".join(request_map.values()),
                 period="1d", 
                 interval="1m", # On prend la minute la plus récente
                 group_by='ticker',
@@ -300,9 +310,10 @@ class StockDataExtractor:
             prices = {}
             for ticker in tickers:
                 try:
+                    request_ticker = request_map[ticker]
                     # Extraction du dernier prix 'Close' valide
                     if len(tickers) > 1:
-                        last_price = data[ticker]['Close'].dropna().iloc[-1]
+                        last_price = data[request_ticker]['Close'].dropna().iloc[-1]
                     else:
                         # Cas particulier si un seul ticker est demandé, yfinance change le format du DF
                         last_price = data['Close'].dropna().iloc[-1]
@@ -310,11 +321,21 @@ class StockDataExtractor:
                     prices[ticker] = float(last_price)
                 except Exception:
                     prices[ticker] = 0.0 # Valeur par défaut si échec
+
+            # Fallback ciblé seulement pour les symboles encore manquants.
+            missing = [ticker for ticker, price in prices.items() if not price]
+            for ticker in missing:
+                try:
+                    df = self.get_historical_data(ticker, period="5d", interval="1d")
+                    if not df.empty:
+                        prices[ticker] = float(df["Close"].dropna().iloc[-1])
+                except Exception:
+                    continue
             
             return prices
 
         except Exception as e:
-            print(f"Erreur lors du bulk fetch: {e}")
+            logger.warning(f"Erreur lors du bulk fetch: {e}")
             return {}
    
     def get_historical_data(self, 

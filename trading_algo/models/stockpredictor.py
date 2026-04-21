@@ -17,14 +17,17 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 from sklearn.preprocessing import StandardScaler
 import warnings
 warnings.filterwarnings('ignore')
+
 # Import des modules internes
 from trading_algo.data.data_extraction import StockDataExtractor, get_stock_overview, MacroDataExtractor
 from trading_algo.visualization.symbol_dashboard import AdvancedTradingDashboard
 from trading_algo.models.base_model import ImprovedLSTMPredictorMultiOutput
 from trading_algo.models.stockmodeltrain import StockModelTrain
 from trading_algo.risk.risk_manager import RiskManager
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 class StockPredictor(StockModelTrain):
     def __init__(self, symbol: str, period: str = "1y"):
@@ -100,15 +103,12 @@ class StockPredictor(StockModelTrain):
                 account_balance = 100000.0  # À rendre paramétrable si besoin
                 risk_tolerance = getattr(self, 'risk_tolerance', 0.02)  # 2% par défaut
 
-                # Si generate_predictions renvoie la structure classique { '1d': price, ... }
-                # itérer sur items() fonctionne. If generate_predictions returns other structure,
-                # use the 'predictions' entry if available.
+                # Parcours des prédictions par horizon
                 preds_iter = predictions_dict
                 if isinstance(predictions_dict, dict) and 'ensemble' in predictions_dict and 'individual' in predictions_dict:
-                    # prefer the simple mapping produced by legacy generate_predictions if present
-                    # fallback to individual models otherwise
-                    if isinstance(predictions_dict.get('individual'), dict) and predictions_dict.get('individual'):
-                        preds_iter = {k: None for k in predictions_dict['individual'].keys()}  # keep keys only
+                    # Utiliser les clés des modèles individuels si disponibles
+                    if isinstance(predictions_dict.get('individual'), dict) and predictions_dict['individual']:
+                        preds_iter = {k: None for k in predictions_dict['individual'].keys()}
                     else:
                         preds_iter = predictions_dict.get('ensemble', {})
 
@@ -157,7 +157,7 @@ class StockPredictor(StockModelTrain):
         except Exception as e:
             logger.error(f"Erreur lors de l'analyse avancée avancée de {self.symbol}: {e}")
             return {"error": str(e)}
-       
+
     def _log_technical_indicators(self):
         """Affiche les dernières valeurs des indicateurs techniques clés"""
         if self.features is None or self.features.empty:
@@ -230,7 +230,7 @@ class StockPredictor(StockModelTrain):
             predictions = self._generate_predictions(
                 features_df,
                 days_ahead,
-                method=ensemble_quality
+                method=ensemble_method   # Correction : utilise ensemble_method au lieu de ensemble_quality
             )
 
             # --- Interpolation des prédictions ponctuelles ---
@@ -721,32 +721,32 @@ class StockPredictor(StockModelTrain):
         return self.prediction_history
 
     def _get_technical_summary(self) -> Dict[str, Any]:
-            """Extrait et formate les indicateurs techniques pour le rapport final."""
-            try:
-                if self.features is None or self.features.empty:
-                    logger.warning("Features vides pour le résumé technique.")
-                    return {}
-
-                last_row = self.features.iloc[-1]
-                # Mapping pour potentiellement ajouter des descriptions ou arrondis spécifiques
-                key_indicators = {
-                    'RSI': 'Relative Strength Index',
-                    'MACD': 'Moving Average Convergence Divergence',
-                    'SMA_20': 'Simple MA 20',
-                    'SMA_50': 'Simple MA 50',
-                    'SMA_200': 'Simple MA 200',
-                    'ATR': 'Average True Range',
-                    'BB_Width': 'Bollinger Band Width'
-                }
-            
-                return {
-                    label: round(float(last_row[col]), 4) 
-                    for col, label in key_indicators.items() 
-                    if col in last_row
-                }
-            except Exception as e:
-                logger.error(f"⚠️ Erreur résumé technique: {e}")
+        """Extrait et formate les indicateurs techniques pour le rapport final."""
+        try:
+            if self.features is None or self.features.empty:
+                logger.warning("Features vides pour le résumé technique.")
                 return {}
+
+            last_row = self.features.iloc[-1]
+            # Mapping pour potentiellement ajouter des descriptions ou arrondis spécifiques
+            key_indicators = {
+                'RSI': 'Relative Strength Index',
+                'MACD': 'Moving Average Convergence Divergence',
+                'SMA_20': 'Simple MA 20',
+                'SMA_50': 'Simple MA 50',
+                'SMA_200': 'Simple MA 200',
+                'ATR': 'Average True Range',
+                'BB_Width': 'Bollinger Band Width'
+            }
+
+            return {
+                label: round(float(last_row[col]), 4)
+                for col, label in key_indicators.items()
+                if col in last_row
+            }
+        except Exception as e:
+            logger.error(f"⚠️ Erreur résumé technique: {e}")
+            return {}
 
     def _get_market_context(self) -> Dict[str, Any]:
         """Récupère le contexte macro-économique avec gestion des erreurs par service."""
@@ -754,39 +754,45 @@ class StockPredictor(StockModelTrain):
         try:
             # On utilise les instances déjà existantes si possible pour économiser les ressources
             macro = getattr(self, 'macro_extractor', MacroDataExtractor())
-            
+
             # Appels isolés pour éviter qu'une erreur sur un service ne bloque tout le contexte
             try:
                 context["market_indicators"] = self.market_data_extractor.get_market_indicators()
-            except Exception: context["market_indicators"] = "Indisponible"
+            except Exception:
+                context["market_indicators"] = "Indisponible"
 
             try:
                 context["economic_indicators"] = macro.get_economic_indicators("US")
-            except Exception: context["economic_indicators"] = {}
+            except Exception:
+                context["economic_indicators"] = {}
 
             try:
                 context["commodities"] = macro.get_commodity_prices()
-            except Exception: context["commodities"] = {}
+            except Exception:
+                context["commodities"] = {}
 
             return context
         except Exception as e:
             logger.error(f"⚠️ Erreur globale contexte marché: {e}")
             return {}
 
-# --- POINT D'ENTRÉE ---
 
+# --- POINT D'ENTRÉE ---
 def main():
+    # Logging
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
     """Script de test principal avec affichage formaté."""
     print("\n" + "="*60)
     print("🚀 STOCK PREDICTOR PRO - Analyse Multidimensionnelle")
     print("="*60)
 
     symbol = "AAPL"
-    
+
     try:
-        # Initialisation avec balance de test
-        predictor = StockPredictor(symbol, period="3y", account_balance=50000.0)
-        
+        # Initialisation SANS account_balance (paramètre non prévu dans __init__)
+        predictor = StockPredictor(symbol, period="3y")
+
         print(f"\n[1/3] 📡 Récupération des données et entraînement pour {symbol}...")
         results = predictor.analyze_stock_advanced()
 
@@ -803,13 +809,22 @@ def main():
 
         print(f"\n[3/3] 🛡️ Gestion du Risque (Horizon Court Terme)")
         risk = results.get('risk_metrics', {})
-        h_1d = risk.get('horizons', {}).get('1d', {})
-        
-        if h_1d:
-            print(f"📉 Stop-Loss suggéré : ${h_1d.get('stop_loss')}")
-            print(f"📈 Take-Profit cible : ${h_1d.get('take_profit')}")
-            print(f"💰 Taille position   : {h_1d.get('position_sizing')} unités")
-        
+        # Correction: les stop_loss sont dans un dictionnaire par horizon
+        stop_loss_dict = risk.get('stop_loss_levels', {})
+        take_profit_dict = risk.get('take_profit_levels', {})
+        pos_size_dict = risk.get('suggested_position_sizes', {})
+
+        if '1d' in stop_loss_dict:
+            print(f"📉 Stop-Loss suggéré : ${stop_loss_dict['1d']}")
+            print(f"📈 Take-Profit cible : ${take_profit_dict.get('1d', 'N/A')}")
+            print(f"💰 Taille position   : {pos_size_dict.get('1d', 'N/A')} unités")
+            pos = pos_size_dict.get('1d', {})
+            if pos:
+                print(f"💰 Taille position   : {pos.get('units', 'N/A'):.0f} unités")
+                print(f"💰 Risque total      : ${pos.get('total_risk_cash', 0):.2f}")
+        else:
+            print("⚠️ Aucune donnée de risque à 1 jour disponible.")
+
         print("\n" + "="*60)
         print("✅ Rapport généré avec succès.")
 
@@ -819,6 +834,7 @@ def main():
         print(f"\n❌ Erreur critique : {e}")
         import traceback
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,5 @@
 from dash import Input, Output, State, callback_context, dash_table, html
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import pandas as pd
 import plotly.graph_objects as go
@@ -33,18 +34,33 @@ def register_portfolio_callbacks(app):
         prevent_initial_call=True
     )
     def load_portfolio(n_clicks, portfolio_name):
+        trigger = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else None
+        if trigger != "load-portfolio-btn" or not n_clicks:
+            raise PreventUpdate
+
         if not portfolio_name:
-            return {}
+            return {
+                "portfolio_name": None,
+                "analysis": {},
+                "status": "missing_selection",
+            }
 
         portfolio = manager.load_portfolio(portfolio_name)
         if not portfolio:
-            return {}
+            return {
+                "portfolio_name": portfolio_name,
+                "analysis": {},
+                "status": "load_error",
+            }
 
-        analysis = manager.analyze_portfolio()
+        # Keep the web tab responsive: fetch only the lightweight snapshot here.
+        # Expensive long-horizon risk calculations are deferred.
+        analysis = manager.analyze_portfolio(include_risk=False)
 
         return {
             "portfolio_name": portfolio_name,
-            "analysis": analysis
+            "analysis": analysis,
+            "status": "loaded",
         }
 
     # =========================================================

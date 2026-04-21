@@ -66,7 +66,13 @@ class SymbolManager:
                 return results if isinstance(results, dict) else {'error': 'Empty analysis result'}
 
             tech_df = None
+            if hasattr(predictor, 'features') and isinstance(predictor.features, pd.DataFrame):
+                if not predictor.features.empty:
+                    tech_df = predictor.features.copy()
+
             for key in ('technical', 'features', 'historical', 'technical_indicators'):
+                if tech_df is not None:
+                    break
                 data = results.get(key)
                 if isinstance(data, pd.DataFrame) and not data.empty:
                     tech_df = data

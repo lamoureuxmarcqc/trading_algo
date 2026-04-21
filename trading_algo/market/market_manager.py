@@ -80,8 +80,11 @@ class MarketManager:
             try:
                 if not isinstance(d, dict):
                     continue
-                dates = pd.to_datetime(d.get("dates") or d.get("index") or [])
                 closes = d.get("closes") or d.get("Close") or []
+                raw_dates = d.get("dates") or d.get("index") or []
+                dates = pd.to_datetime(raw_dates)
+                if len(dates) == 0 and len(closes) > 0:
+                    dates = pd.date_range(end=pd.Timestamp.now(), periods=len(closes), freq="B")
                 if len(dates) > 0 and len(closes) > 0:
                     min_len = min(len(dates), len(closes))
                     df = pd.DataFrame({"Close": closes[-min_len:]}, index=dates[-min_len:])
@@ -329,13 +332,15 @@ class MarketManager:
         try:
             indices_task = asyncio.to_thread(self._fetch_indices)
             macro_task = asyncio.to_thread(self.macro_extractor.get_all_macro_data)
-            indices_data, macro_data = await asyncio.gather(indices_task, macro_task)
+            indicators_task = asyncio.to_thread(self.extractor.get_market_indicators)
+            indices_data, macro_data, market_indicators = await asyncio.gather(indices_task, macro_task, indicators_task)
             sector_perf, top_movers = await self._analyze_market_components_async()
             regime, score = self.regime_engine.compute_regime(macro_data, indices_data)
             payload = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "indices": indices_data,
                 "macro": macro_data,
+                "market_indicators": market_indicators or {},
                 "sector_perf": sector_perf,
                 "top_gainers": top_movers,
                 "regime": {"status": regime, "score": score}
@@ -370,10 +375,13 @@ class MarketManager:
             try:
                 df = self.extractor.get_historical_data(sym, period='3mo')
                 if df is not None and len(df) >= 2:
+                    closes = df['Close'].dropna()
+                    dates = pd.to_datetime(closes.index).strftime("%Y-%m-%d").tolist()
                     last_close = float(df['Close'].iloc[-1])
                     prev_close = float(df['Close'].iloc[-2])
                     results[sym] = {
-                        'closes': df['Close'].dropna().tolist(),
+                        'dates': dates,
+                        'closes': closes.tolist(),
                         'last_price': round(last_close, 2),
                         'change_pct': round(((last_close / prev_close) - 1) * 100, 2)
                     }

@@ -5,6 +5,7 @@ import threading
 import json
 import asyncio
 import signal
+import importlib
 from typing import Any, Dict, Optional, List
 from datetime import datetime as dt_class
 from pathlib import Path
@@ -20,12 +21,17 @@ from trading_algo.web_dashboard.layouts.portfolio_layout import portfolio_layout
 from trading_algo.web_dashboard.layouts.symbol_layout import symbol_layout
 from trading_algo.web_dashboard.layouts.market_layout import market_layout
 from trading_algo import settings
+from trading_algo.logging_config import init_logging
 
 # --- MODULES DE GESTION ---
-from trading_algo.market.market_manager import MarketManager
+try:
+    from trading_algo.market.market_manager import MarketManager
+except Exception as e:
+    MarketManager = None
+    logging.getLogger(__name__).exception("Impossible de charger MarketManager: %s", e)
 
 # Logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+init_logging(level=os.getenv("LOG_LEVEL", None), logfile=os.getenv("LOG_FILE", None))
 logger = logging.getLogger(__name__)
 
 # --- CACHE & MANAGER (inchangés) ---
@@ -79,7 +85,7 @@ class MarketCacheService:
 
 
 cache_service = MarketCacheService()
-manager = MarketManager(cache_service)
+manager = MarketManager(cache_service) if MarketManager is not None else None
 
 # --- DASH APP ---
 app = Dash(
@@ -94,6 +100,13 @@ app.title = "Trading Algo — Professional Terminal"
 @server.route("/health")
 def _health():
     return "OK", 200
+
+# Shared wrapper to keep tab panels visually consistent.
+def _tab_panel(child: Any) -> dbc.Card:
+    return dbc.Card(
+        dbc.CardBody(child, className="p-0"),
+        className="border-0 shadow-sm",
+    )
 
 # layout
 app.layout = html.Div([
@@ -112,20 +125,30 @@ app.layout = html.Div([
     dbc.Container(fluid=True, className="mt-3", children=[
         dbc.Row(id="market-summary", className="mb-3 g-2 flex-nowrap overflow-auto pb-2"),
 
-        dbc.Tabs(id="main-tabs", active_tab="tab-portfolio", className="nav-justified shadow-sm", children=[
-            dbc.Tab(label="📈 Portefeuille", tab_id="tab-portfolio", label_class_name="fw-bold"),
-            dbc.Tab(label="🔍 Analyse Symbole", tab_id="tab-symbol", label_class_name="fw-bold"),
-            dbc.Tab(label="🌍 Macro & Risques", tab_id="tab-market", label_class_name="fw-bold"),
-        ],
-
-        # Pas d'animation de changement d'onglet pour accélérer l'affichage
-        persistence_type="session",
-        ),
-        dbc.Spinner(
-            html.Div(id="tab-content", className="p-4 bg-white border-start border-end border-bottom shadow-sm", style={"minHeight": "80vh"}),
-            color="primary",
-            type="border",
-            delay_show=200
+        dbc.Tabs(
+            id="main-tabs",
+            active_tab="tab-portfolio",
+            className="nav-justified shadow-sm",
+            children=[
+                dbc.Tab(
+                    _tab_panel(portfolio_layout()),
+                    label="📈 Portefeuille",
+                    tab_id="tab-portfolio",
+                    label_class_name="fw-bold",
+                ),
+                dbc.Tab(
+                    _tab_panel(symbol_layout()),
+                    label="🔍 Analyse Symbole",
+                    tab_id="tab-symbol",
+                    label_class_name="fw-bold",
+                ),
+                dbc.Tab(
+                    _tab_panel(market_layout()),
+                    label="🌍 Macro & Risques",
+                    tab_id="tab-market",
+                    label_class_name="fw-bold",
+                ),
+            ],
         ),
 
         dcc.Store(id="market-data-store"),
@@ -134,27 +157,8 @@ app.layout = html.Div([
     ])
 ], style={"backgroundColor": "#f8f9fa", "minHeight": "100vh"})
 
-# --- Safe render_tab: retourne une alerte lisible si un layout lève ---
-@app.callback(
-    Output("tab-content", "children"),
-    [Input("main-tabs", "active_tab")]
-)
-def render_tab(tab):
-    try:
-        if tab == "tab-portfolio":
-            return portfolio_layout()
-        elif tab == "tab-symbol":
-            return symbol_layout()
-        elif tab == "tab-market":
-            return market_layout()
-        return html.Div("Sélectionnez un onglet valide.")
-    except Exception as e:
-        logger.exception("Erreur lors du rendu de l'onglet %s: %s", tab, e)
-        # Affiche l'erreur côté UI pour debugging immédiat
-        return dbc.Alert([
-            html.H5("Erreur interne lors du chargement de l'onglet", className="mb-2"),
-            html.Pre(str(e))
-        ], color="danger")
+# Keep the full tab tree available for Dash validation and callback wiring.
+app.validation_layout = app.layout
 
 # --- global data callback (inchangé) ---
 @app.callback(
@@ -217,19 +221,19 @@ def update_ui_from_cache(_):
     return status_text, cards, cache
 
 # --- REGISTER BUSINESS CALLBACKS (PROTECT AGAINST FAILURES) ---
-def safe_register(func, app, name):
+def safe_register(module_path: str, register_name: str, app_instance: Dash) -> None:
     try:
-        func(app)
-        logger.info("Registered callbacks: %s", name)
+        module = importlib.import_module(module_path)
+        register_func = getattr(module, register_name)
+        register_func(app_instance)
+        logger.info("Registered callbacks: %s.%s", module_path, register_name)
     except Exception as e:
-        logger.exception("Failed to register callbacks %s: %s", name, e)
+        logger.exception("Failed to register callbacks %s.%s: %s", module_path, register_name, e)
 
 # register callbacks with protection
-from trading_algo.callbacks import portfolio_callbacks, symbol_callbacks, market_callbacks
-
-safe_register(portfolio_callbacks.register_portfolio_callbacks, app, "portfolio_callbacks")
-safe_register(symbol_callbacks.register_symbol_callbacks, app, "symbol_callbacks")
-safe_register(market_callbacks.register_market_callbacks, app, "market_callbacks")
+safe_register("trading_algo.callbacks.portfolio_callbacks", "register_portfolio_callbacks", app)
+safe_register("trading_algo.callbacks.symbol_callbacks", "register_symbol_callbacks", app)
+safe_register("trading_algo.callbacks.market_callbacks", "register_market_callbacks", app)
 
 # --- SCHEDULER & SIGNAL HANDLERS (unchanged) ---
 _scheduler: Optional[BackgroundScheduler] = None
@@ -238,6 +242,9 @@ def _start_scheduler() -> None:
     global _scheduler
     if _scheduler and _scheduler.running:
         logger.info("Scheduler déjà démarré.")
+        return
+    if manager is None:
+        logger.warning("Scheduler non démarré: MarketManager indisponible.")
         return
 
     interval_min = getattr(settings, "MARKET_REFRESH_INTERVAL_MIN", 10)

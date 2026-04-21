@@ -51,13 +51,19 @@ class Position:
     last_updated: datetime = field(default_factory=datetime.now)
     
     def current_value(self, current_price: float) -> float:
+        if current_price is None:
+            return 0.0
         return self.quantity * current_price
     
     def unrealized_pnl(self, current_price: float) -> float:
-        return self.quantity * (current_price - self.average_price)
+        if current_price is None:
+            return 0.0
+        return (current_price - self.average_price) * self.quantity
     
     def unrealized_pnl_percent(self, current_price: float) -> float:
-        return (current_price / self.average_price - 1) if self.average_price > 0 else 0.0
+        if current_price is None or self.average_price == 0:
+            return 0.0
+        return (current_price - self.average_price) / self.average_price
 
     def update_position(self, qty: float, price: float, fees: float, is_buy: bool):
         """Logique de calcul du prix moyen pondéré (WAP)"""
@@ -66,7 +72,7 @@ class Position:
             self.quantity += qty
             self.average_price = total_cost / self.quantity if self.quantity > 0 else 0
         else:
-            if qty > self.quantity + 1e-9: # Marge d'erreur flottante
+            if qty > self.quantity + 1e-9:  # Marge d'erreur flottante
                 raise ValueError(f"Vente de {qty} {self.ticker} impossible (Avoir: {self.quantity})")
             self.quantity -= qty
         self.last_updated = datetime.now()
@@ -78,7 +84,7 @@ class Portfolio:
         self.cash = cash
         self.positions: Dict[str, Position] = {}
         self.transaction_history: List[Order] = []
-        self.performance_history: List[Dict] = [] # Liste pour la courbe d'équité
+        self.performance_history: List[Dict] = []  # Liste pour la courbe d'équité
         self.last_updated = datetime.now()
 
     # --- PERSISTENCE ---
@@ -103,7 +109,7 @@ class Portfolio:
             json.dump(data, f, indent=4, default=str)
 
     @classmethod
-    def load_from_file(cls, filepath: str) -> 'Portfolio':
+    def load_from_file(cls, filepath: str) -> Optional['Portfolio']:
         """Reconstruit le Portfolio depuis un JSON."""
         if not os.path.exists(filepath):
             return None
@@ -147,7 +153,8 @@ class Portfolio:
                 return False
 
             if order.ticker not in self.positions:
-                if not is_buy: return False
+                if not is_buy:
+                    return False
                 self.positions[order.ticker] = Position(order.ticker, 0, 0)
             
             self.positions[order.ticker].update_position(qty, price, order.fees, is_buy)
@@ -218,7 +225,8 @@ class Portfolio:
         perf = self.calculate_performance(prices)
         total = perf['total_value']
         
-        if total <= 0: return {"Cash": 100.0}
+        if total <= 0:
+            return {"Cash": 100.0}
 
         alloc = {t: (data['value'] / total) for t, data in perf['positions'].items()}
         alloc['Cash'] = (self.cash / total)
@@ -253,13 +261,14 @@ class Portfolio:
         df = self.get_summary(market_prices)
         total_val = df['Valeur'].sum() + self.cash if not df.empty else self.cash
         
-        print(f"\n{'='*50}\nPORTFOLIO: {self.name.upper()}\n{'='*50}")
-        print(f"VALEUR TOTALE: {total_val:,.2f} $ | CASH: {self.cash:,.2f} $")
+        logger.info(f"\n{'='*50}\nPORTFOLIO: {self.name.upper()}\n{'='*50}")
+        logger.info(f"VALEUR TOTALE: {total_val:,.2f} $ | CASH: {self.cash:,.2f} $")
         
         if RICH_AVAILABLE and not df.empty:
             console = Console()
             table = Table(show_header=True, header_style="bold cyan", box=None)
-            for col in df.columns: table.add_column(col)
+            for col in df.columns:
+                table.add_column(col)
             
             for _, row in df.iterrows():
                 pnl_style = "green" if row['P&L'] >= 0 else "red"
@@ -275,4 +284,7 @@ class Portfolio:
                 )
             console.print(table)
         else:
-            print(df.to_string(index=False) if not df.empty else "Aucune position.")
+            if not df.empty:
+                logger.info("\n" + df.to_string(index=False))
+            else:
+                logger.info("Aucune position.")

@@ -26,6 +26,7 @@ class PortfolioManager:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         
         self.current_portfolio: Optional[Portfolio] = None
+        self.current_portfolio_name: Optional[str] = None
         self.risk_manager = RiskManager()
 
         # Cache de session pour les données historiques (accélère le Risk Analysis)
@@ -50,6 +51,10 @@ class PortfolioManager:
 
     def load_portfolio(self, name: str) -> Optional[Portfolio]:
         """Charge un portefeuille spécifique depuis le disque."""
+        if self.current_portfolio is not None and self.current_portfolio_name == name:
+            logger.info(f"Portefeuille '{name}' servi depuis le cache mémoire")
+            return self.current_portfolio
+
         filepath = self.base_dir / f"{name}.json"
         
         if not filepath.exists():
@@ -58,6 +63,7 @@ class PortfolioManager:
             
         try:
             self.current_portfolio = Portfolio.load_from_file(str(filepath))
+            self.current_portfolio_name = name
             logger.info(f"Portefeuille '{name}' chargé (Cash: {self.current_portfolio.cash:.2f}$)")
             return self.current_portfolio
         except Exception as e:
@@ -96,8 +102,12 @@ class PortfolioManager:
                 results = dict(executor.map(_fetch, tickers))
                 return {t: p for t, p in results.items() if p is not None}
 
-    def analyze_portfolio(self) -> Dict[str, Any]:
-        """Analyse complète : Performance + Allocation + Risque."""
+    def analyze_portfolio(self, include_risk: bool = True) -> Dict[str, Any]:
+        """Analyse du portefeuille.
+
+        - `include_risk=True`: calcule aussi les métriques de risque sur historique 3 ans.
+        - `include_risk=False`: snapshot rapide pour l'UI web.
+        """
         if not self.current_portfolio:
             return {'error': 'Aucun portefeuille actif'}
 
@@ -112,7 +122,7 @@ class PortfolioManager:
 
         performance = self.current_portfolio.calculate_performance(prices_for_calc)
         allocation = self.current_portfolio.get_allocation(prices_for_calc)
-        risk_metrics = self._calculate_advanced_risk(tickers, prices_for_calc)
+        risk_metrics = self._calculate_advanced_risk(tickers, prices_for_calc) if include_risk else {}
 
         return {
             'performance': performance,
@@ -179,6 +189,33 @@ class PortfolioManager:
 
         target_alloc = self._build_tiered_allocation(scores)
         return target_alloc, scores
+
+    def get_quality_scores(self, fundamentals_map: Optional[Dict[str, Dict]] = None) -> Dict[str, float]:
+        """
+        Compatibilité UI: retourne un score qualité simple par ticker.
+        Certaines versions du dashboard portefeuille appellent encore cette méthode.
+        """
+        if not self.current_portfolio:
+            return {}
+
+        try:
+            from trading_algo.strategy.factor_engine import FactorEngine
+            engine = FactorEngine()
+        except Exception:
+            engine = None
+
+        fundamentals_map = fundamentals_map or {}
+        scores: Dict[str, float] = {}
+        for ticker in self.current_portfolio.positions.keys():
+            fundamentals = fundamentals_map.get(ticker, {})
+            try:
+                if engine is not None:
+                    scores[ticker] = float(engine.compute_quality_score(fundamentals))
+                else:
+                    scores[ticker] = self._compute_buffett_score(fundamentals, volatility=0.20)
+            except Exception:
+                scores[ticker] = 0.0
+        return scores
 
     def _compute_buffett_score(self, fundamentals: Dict, volatility: float) -> float:
         """Modèle mathématique de sélection d'actifs 'Value'."""

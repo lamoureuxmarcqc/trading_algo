@@ -21,3 +21,55 @@
         font-size: 0.9rem;
     }
 }
+
+.nav-tabs .nav-link {
+    color: #000 !important;
+    background-color: #fff !important;
+    border: 1px solid #dee2e6 !important;
+}
+
+.nav-tabs .nav-link.active {
+    color: #0d6efd !important;
+    background-color: #e9ecef !important;
+    border-bottom-color: #fff !important;
+}
+
+/* =========================================================
+   Onglets plus hauts et mieux visibles
+   ========================================================= */
+.nav-tabs {
+    border-bottom: 2px solid #dee2e6;
+    margin-bottom: 1rem;
+}
+
+    .nav-tabs .nav-link {
+        padding: 12px 24px !important; /* Augmente la hauteur */
+        font-size: 1.1rem !important;
+        font-weight: 600 !important;
+        color: #2c3e50 !important;
+        background-color: #f8f9fa !important;
+        border: 1px solid #dee2e6 !important;
+        border-bottom: none !important;
+        margin-right: 4px !important;
+        transition: all 0.2s ease;
+    }
+
+        .nav-tabs .nav-link:hover {
+            background-color: #e9ecef !important;
+            color: #0d6efd !important;
+        }
+
+        .nav-tabs .nav-link.active {
+            background-color: #ffffff !important;
+            color: #0d6efd !important;
+            border-bottom: 2px solid #0d6efd !important;
+            transform: translateY(-2px);
+        }
+
+/* Pour les écrans petits, réduire un peu */
+@media (max-width: 768px) {
+    .nav-tabs .nav-link {
+        padding: 8px 12px !important;
+        font-size: 0.9rem !important;
+    }
+}

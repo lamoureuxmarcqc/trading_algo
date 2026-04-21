@@ -113,95 +113,75 @@ def run_analysis(args):
         create_stock_dashboard(symbol, predictor, results)
 
 def create_stock_dashboard(symbol, predictor, results):
-    """
-    Build stock dashboard using SymbolManager as primary data source and
-    AdvancedTradingDashboard as the visualization layer.
-
-    - Uses SymbolManager.analyze_symbol(symbol) to get normalized structures:
-      {'results': ..., 'technical': pd.DataFrame, 'predictions': pd.DataFrame}
-    - Falls back to predictor attributes when manager doesn't provide data.
-    - Supports multiple AdvancedTradingDashboard API shapes (create_full_dashboard / create_dashboard).
-    """
     from trading_algo.visualization.symbol_dashboard import AdvancedTradingDashboard
-    from trading_algo.stock.stock_manager import symbol_manager
-    import pandas as pd
-    import os
-
     try:
-        # Instantiate dashboard (single-arg constructor expected)
         dash = AdvancedTradingDashboard(symbol)
 
-        # Prefer business-layer data from SymbolManager (lazy, robust)
-        resp = {}
-        try:
-            resp = symbol_manager.analyze_symbol(symbol) or {}
-        except Exception:
-            resp = {}
-
-        tech_df = resp.get("technical") if isinstance(resp, dict) else None
-        preds_df = resp.get("predictions") if isinstance(resp, dict) else None
-        mgr_results = resp.get("results", {}) if isinstance(resp, dict) else {}
-
-        # Fallback to predictor-provided data if manager didn't return technicals
-        if (tech_df is None or (hasattr(tech_df, "empty") and tech_df.empty)) and hasattr(predictor, "features"):
-            tech_df = getattr(predictor, "features", tech_df)
-
-        # Build a simple predictions DataFrame if none provided
-        if preds_df is None:
-            preds_raw = results.get("predictions") or mgr_results.get("predictions") or {}
-            if isinstance(preds_raw, dict) and preds_raw:
-                try:
-                    # Convert mapping {'1d': price, ...} to a dated DataFrame (simple incremental dates)
-                    preds_df = pd.DataFrame({"Predicted_Close": list(preds_raw.values())})
-                    start = pd.Timestamp.now().normalize() + pd.Timedelta(days=1)
-                    preds_df.index = pd.date_range(start=start, periods=len(preds_df), freq="D")
-                except Exception:
-                    preds_df = pd.DataFrame()
-            else:
+        # Prefer predictor-provided data (already fetched/trained)
+        tech_df = getattr(predictor, "features", None)
+        preds_df = None
+        # predictions provided by results (mapping) -> convert to DataFrame if present
+        preds_raw = results.get("predictions") if isinstance(results, dict) else None
+        if isinstance(preds_raw, dict) and preds_raw:
+            import pandas as pd
+            try:
+                preds_df = pd.DataFrame({"Predicted_Close": list(preds_raw.values())})
+                start = pd.Timestamp.now().normalize() + pd.Timedelta(days=1)
+                preds_df.index = pd.date_range(start=start, periods=len(preds_df), freq="D")
+            except Exception:
                 preds_df = pd.DataFrame()
 
-        # Determine risk metrics: prefer manager's, fallback to results
-        risk_metrics = mgr_results.get("risk_metrics", results.get("risk_metrics", {}))
+        # Only call SymbolManager if predictor has no useful technical data
+        if (tech_df is None or (hasattr(tech_df, "empty") and tech_df.empty)):
+            try:
+                from trading_algo.stock.stock_manager import symbol_manager
+                resp = symbol_manager.analyze_symbol(symbol) or {}
+                tech_df = resp.get("technical") or tech_df
+                if preds_df is None:
+                    preds_df = resp.get("predictions") or preds_df
+            except Exception:
+                pass
 
-        # Load data into the visualization layer using a tolerant call
+        # Risk metrics preferences
+        risk_metrics = results.get("risk_metrics", {}) if isinstance(results, dict) else {}
+
+        # Load into dashboard (tolerant API)
         try:
-            # Try the common signature first
             dash.load_data(
                 technical_data=tech_df,
                 predictions_df=preds_df,
-                risk_metrics=risk_metrics
+                risk_metrics=risk_metrics,
+                overview=results.get("overview", {})
             )
         except TypeError:
-            # Fallback: try positional or alternative names if load_data differs
+            # fallback to positional
             try:
                 dash.load_data(tech_df, preds_df, risk_metrics)
             except Exception:
-                # Last resort: set attributes directly
-                setattr(dash, "technical_data", tech_df)
-                setattr(dash, "predictions_df", preds_df)
-                setattr(dash, "risk_metrics", risk_metrics)
+                dash.technical_data = tech_df
+                dash.predictions_df = preds_df
+                dash.risk_metrics = risk_metrics
 
-        # Propagate score & recommendation if supported by dashboard
+        # propagate score/recommendation
         if hasattr(dash, "score"):
-            dash.score = results.get("trading_score", mgr_results.get("trading_score", getattr(predictor, "trading_score", 5.0)))
+            dash.score = results.get("trading_score", getattr(predictor, "trading_score", dash.score))
         if hasattr(dash, "recommendation"):
-            dash.recommendation = results.get("recommendation", mgr_results.get("recommendation", getattr(predictor, "recommendation", "NEUTRE")))
+            dash.recommendation = results.get("recommendation", getattr(predictor, "recommendation", dash.recommendation))
 
-        # Create figure using available API
-        fig = None
+        # create figure (try consistent API)
         if hasattr(dash, "create_full_dashboard"):
             fig = dash.create_full_dashboard()
         elif hasattr(dash, "create_dashboard"):
             fig = dash.create_dashboard()
         else:
-            # Try generic name
             creator = getattr(dash, "create", None)
             fig = creator() if callable(creator) else None
 
         if fig is None:
-            logger.error("Erreur lors de la génération du dashboard visuel : figure introuvable.")
+            logger.error("Erreur: impossible de créer la figure du dashboard.")
             return
 
+        import os
         path = f"dashboards/{symbol}_{datetime.now().strftime('%Y%m%d_%H%M')}.html"
         os.makedirs("dashboards", exist_ok=True)
         fig.write_html(path)
@@ -225,20 +205,103 @@ def run_web(args):
         logger.info("🌐 Démarrage du serveur Dash sur http://localhost:8050")
         app.run(debug=True, host='localhost', port=8050)
 
+# --- Mode Batch (Entraînement multi‑symboles) ---
+def run_batch(args):
+    """
+    Lance l'entraînement batch sur une liste de symboles.
+    """
+    # Chargement dynamique du BatchTrainer
+    BatchTrainer = get_module('trading_algo.batch.trainer', 'BatchTrainer')
+    if not BatchTrainer:
+        logger.error("❌ Impossible de charger BatchTrainer. Vérifiez que trading_algo.batch.trainer existe.")
+        return
+
+    # Déterminer la liste des symboles
+    symbols = []
+    if args.symbols_file:
+        # Lecture depuis un fichier (un symbole par ligne)
+        try:
+            with open(args.symbols_file, 'r') as f:
+                symbols = [line.strip().upper() for line in f if line.strip()]
+            logger.info(f"📋 Chargement de {len(symbols)} symboles depuis {args.symbols_file}")
+        except Exception as e:
+            logger.error(f"Erreur lecture fichier symboles: {e}")
+            return
+    elif args.symbol:
+        # Liste séparée par virgules
+        symbols = [s.strip().upper() for s in args.symbol.split(',')]
+        logger.info(f"📋 Utilisation des symboles: {symbols}")
+    else:
+        # Par défaut: un petit échantillon pour test
+        default_symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA", "JPM", "JNJ", "V"]
+        # Ajout de quelques entreprises supplémentaires
+        default_symbols.extend(["NFLX", "ADBE", "CRM", "INTC", "CSCO"])
+        logger.warning(f"Aucun symbole spécifié. Utilisation des 10 valeurs par défaut: {default_symbols}")
+        symbols = default_symbols
+
+    if not symbols:
+        logger.error("Aucun symbole à traiter.")
+        return
+
+    # Paramètres batch
+    period = getattr(args, 'period', '10y')
+    lookback = getattr(args, 'lookback', 60)
+    epochs = getattr(args, 'batch_epochs', 50)
+    batch_size = getattr(args, 'batch_size', 64)
+    output_dir = getattr(args, 'output_dir', 'models_saved/batch')
+    val_ratio = getattr(args, 'val_ratio', 0.1)
+    clip_quantile = getattr(args, 'clip_quantile', 0.01)
+    max_symbols = getattr(args, 'max_symbols', 500)
+    min_rows = getattr(args, 'min_rows', 300)
+
+    logger.info("=" * 60)
+    logger.info("🚀 LANCEMENT DU MODE BATCH (entraînement multi‑symboles)")
+    logger.info(f"Symboles: {len(symbols)} actions")
+    logger.info(f"Période: {period}, Lookback: {lookback}, Epochs: {epochs}")
+    logger.info(f"Batch size: {batch_size}, Validation ratio: {val_ratio}")
+    logger.info(f"Dossier sortie: {output_dir}")
+    logger.info("=" * 60)
+
+    # Instanciation et exécution
+    trainer = BatchTrainer(
+        symbols=symbols,
+        period=period,
+        lookback=lookback,
+        epochs=epochs,
+        batch_size=batch_size,
+        output_dir=output_dir,
+        max_symbols=max_symbols,
+        min_rows=min_rows,
+        val_ratio=val_ratio,
+        clip_quantile=clip_quantile,
+        max_retries_per_symbol=3,
+    )
+    trainer.run()
+
 # --- Main Entry Point ---
 
 def main():
     parser = argparse.ArgumentParser(description="Système d'Analyse Boursière avec IA")
-    parser.add_argument("symbol", nargs="?", help="Symbole boursier")
+    parser.add_argument("symbol", nargs="?", help="Symbole boursier (ou liste séparée par virgules en mode batch)")
     parser.add_argument("--mode", choices=["analyze", "train", "dashboard", "compare", "screen"], default="analyze")
-    parser.add_argument("--period", default="3y")
+    parser.add_argument("--period", default="5y")
     parser.add_argument("--advanced", action="store_true")
     parser.add_argument("--portfolio", choices=["create", "load", "analyze", "rebalance"])
     parser.add_argument("--portfolio-name", default="default")
     parser.add_argument("--dashboard", action="store_true")
     parser.add_argument("--web", action="store_true")
-    parser.add_argument("--batch", action="store_true")
-    parser.add_argument("--batch-epochs", type=int, default=30)
+    
+    # Arguments pour le mode batch
+    parser.add_argument("--batch", action="store_true", help="Activer le mode batch (entraînement multi‑symboles)")
+    parser.add_argument("--symbols-file", type=str, help="Fichier contenant une liste de symboles (un par ligne)")
+    parser.add_argument("--lookback", type=int, default=60, help="Fenêtre rétrospective (jours)")
+    parser.add_argument("--batch-epochs", type=int, default=50, help="Nombre d'epochs")
+    parser.add_argument("--batch-size", type=int, default=64, help="Taille du batch pour l'entraînement")
+    parser.add_argument("--output-dir", type=str, default="models_saved/batch", help="Dossier de sauvegarde des modèles")
+    parser.add_argument("--val-ratio", type=float, default=0.1, help="Fraction des séquences pour validation")
+    parser.add_argument("--clip-quantile", type=float, default=0.01, help="Quantile pour le clipping des outliers")
+    parser.add_argument("--max-symbols", type=int, default=500, help="Nombre maximum de symboles à traiter")
+    parser.add_argument("--min-rows", type=int, default=300, help="Nombre minimum de lignes alignées par symbole")
     
     args = parser.parse_args()
     print_banner()
@@ -253,8 +316,7 @@ def main():
         elif args.mode == "compare":
             run_comparison(args)
         elif args.batch:
-            # Charger BatchTrainer via lazy loading ici si besoin
-            logger.info("Mode batch non implémenté dans cet exemple.")
+            run_batch(args)
         else:
             run_analysis(args)
 

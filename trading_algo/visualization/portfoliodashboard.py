@@ -1,323 +1,290 @@
+"""
+PortfolioDashboard - Couche de visualisation uniquement (16 avril 2026)
+Responsabilité : Générer les figures Plotly et les composants UI à partir des données fournies.
+Aucune logique métier lourde ici (déléguée à PortfolioManager).
+"""
 import os
 import logging
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
+from dash import Input, Output, State, html, dcc
+
 
 from trading_algo.portfolio.portfolio import Portfolio
 from trading_algo.portfolio.portfoliomanager import PortfolioManager
-from trading_algo.risk.risk_manager import RiskManager
-from trading_algo.strategy.market_regime_engine import MarketRegimeEngine
-from trading_algo.strategy.factor_engine import FactorEngine
-from trading_algo.strategy.position_sizing import PositionSizingEngine
-from trading_algo.strategy.risk_overlay import RiskOverlay
 
 logger = logging.getLogger(__name__)
 
-
 class PortfolioDashboard:
     """
-    Dashboard stratégique avancé — version stable production.
-
-    Robustesse:
-    - Tolérance aux données manquantes
-    - Aucun crash Dash
-    - Fallback intelligent
+    Couche de présentation / visualisation du portefeuille.
+    Cette classe ne fait que transformer les données en graphiques et composants Dash.
     """
 
     def __init__(
         self,
-        portfolio: Portfolio,
+        portfolio: Optional[Portfolio] = None,
         portfolio_manager: Optional[PortfolioManager] = None,
-        theme: str = "plotly_dark"
+        theme: str = "plotly_white"   # Changé en plotly_white pour meilleure lisibilité par défaut
     ):
         self.portfolio = portfolio
         self.manager = portfolio_manager
         self.theme = theme
         self.last_regime = None
 
-        # Engines
-        self.regime_engine = MarketRegimeEngine()
-        self.factor_engine = FactorEngine()
-        self.sizing_engine = PositionSizingEngine()
-        self.risk_overlay = RiskOverlay()
-        self.risk_manager = RiskManager()
-
     # =========================================================
-    # 🔹 1. STRATEGIC DASHBOARD (CORE)
+    # 1. RAPPORT STRATÉGIQUE PRINCIPAL (Conseiller IA)
     # =========================================================
     def create_strategic_report(
         self,
-        macro_data: Dict,
-        market_indices: pd.DataFrame,
-        fundamentals_map: Dict
+        macro_data: Dict = None,
+        market_indices: pd.DataFrame = None,
+        fundamentals_map: Dict = None
     ) -> go.Figure:
+        """Crée le graphique principal du tableau de bord stratégique."""
+        if not self.portfolio or not getattr(self.portfolio, 'positions', None):
+            return self._create_empty_fig("Aucun portefeuille chargé ou aucune position.")
+
+        macro_data = macro_data or {}
+        if market_indices is None or (isinstance(market_indices, pd.DataFrame) and market_indices.empty):
+            market_indices = pd.DataFrame()
+        fundamentals_map = fundamentals_map or {}
 
         try:
-            if not self.portfolio or not self.portfolio.positions:
-                return self._create_empty_fig("Aucun portefeuille chargé")
-
-            # --- REGIME ---
-            try:
-                regime, regime_score = self.regime_engine.compute_regime(
-                    macro_data, market_indices
-                )
-            except Exception:
-                regime, regime_score = "NEUTRAL", 50
-
-            # --- QUALITY ---
+            # Les données métier (régime, quality, allocation cible) doivent venir du Manager
+            # Ici on simule ou on appelle le manager si disponible
+            regime = "NEUTRAL"
+            regime_score = 50
             quality_scores = {}
-            for t in self.portfolio.positions.keys():
-                fundamentals = fundamentals_map.get(t, {})
+            target_alloc = {}
+            current_alloc = self.portfolio.get_allocation() if hasattr(self.portfolio, 'get_allocation') else {}
+
+            if self.manager:
                 try:
-                    score = self.factor_engine.compute_quality_score(fundamentals)
-                except Exception:
-                    score = 0
-                quality_scores[t] = score
+                    regime_info = self.manager.get_market_regime(macro_data)
+                    regime = regime_info.get("regime", "NEUTRAL")
+                    regime_score = regime_info.get("score", 50)
 
-            # --- TARGET ALLOCATION ---
-            ranked = sorted(quality_scores.items(), key=lambda x: x[1], reverse=True)
+                    # Quality scores et allocation cible via le manager
+                    quality_scores = self.manager.get_quality_scores(self.portfolio, fundamentals_map)
+                    target_alloc = self.manager.get_target_allocation(self.portfolio, model="buffett")
+                except Exception as e:
+                    logger.warning(f"Erreur lors de l'appel au manager dans strategic report: {e}")
 
-            try:
-                target_alloc = self.sizing_engine.size_positions(ranked, regime)
-            except Exception:
-                target_alloc = {t: 1 / len(ranked) for t, _ in ranked} if ranked else {}
+            # Préparation des données pour le graphique
+            all_tickers = sorted(set(target_alloc.keys()) | set(current_alloc.keys()))
 
-            # --- RISK OVERLAY ---
-            try:
-                perf_data = {
-                    'performance': {
-                        'total_pnl_pct': self.portfolio.calculate_performance({}).get("total_pnl_pct", 0)
-                    }
-                }
-                final_target = self.risk_overlay.apply(target_alloc, perf_data)
-            except Exception:
-                final_target = target_alloc
-
-            # --- CURRENT ---
-            try:
-                current_alloc = self.portfolio.get_allocation()
-            except Exception:
-                current_alloc = {}
-
-            all_tickers = sorted(set(final_target.keys()) | set(current_alloc.keys()))
-
-            # =========================================================
-            # 🔹 FIGURE
-            # =========================================================
             fig = make_subplots(
                 rows=2, cols=2,
-                specs=[
-                    [{"type": "indicator"}, {"type": "bar"}],
-                    [{"type": "bar"}, {"type": "table"}]
-                ],
-                subplot_titles=(
-                    "Market Regime",
-                    "Quality Scores",
-                    "Allocation (Current vs AI)",
-                    "Rebalancing Actions"
-                ),
-                vertical_spacing=0.12
+                specs=[[{"type": "indicator"}, {"type": "bar"}],
+                       [{"type": "bar"}, {"type": "table"}]],
+                subplot_titles=("Régime de Marché", "Scores de Qualité", 
+                               "Allocation Cible vs Actuelle", "Actions de Rééquilibrage"),
+                vertical_spacing=0.14
             )
 
-            # --- REGIME ---
+            # Gauge Régime
             fig.add_trace(go.Indicator(
                 mode="gauge+number",
                 value=regime_score,
-                title={'text': regime},
-                gauge={
-                    'axis': {'range': [-50, 100]},
-                    'bar': {'color': "#00e5ff"}
-                }
+                title={"text": regime},
+                gauge={"axis": {"range": [0, 100]}, "bar": {"color": "#00e5ff"}},
+                number={"font": {"size": 32}}
             ), row=1, col=1)
 
-            # --- QUALITY ---
+            # Quality Scores
             if quality_scores:
                 fig.add_trace(go.Bar(
                     x=list(quality_scores.keys()),
                     y=list(quality_scores.values()),
                     marker_color="#26a69a",
-                    name="Quality"
+                    name="Quality Score"
                 ), row=1, col=2)
 
-            # --- ALLOCATION ---
+            # Allocation Comparaison
             fig.add_trace(go.Bar(
                 x=all_tickers,
-                y=[final_target.get(t, 0) * 100 for t in all_tickers],
-                name="AI Target"
+                y=[target_alloc.get(t, 0) * 100 for t in all_tickers],
+                name="Cible IA",
+                marker_color="#1e88e5"
             ), row=2, col=1)
 
             fig.add_trace(go.Bar(
                 x=all_tickers,
                 y=[current_alloc.get(t, 0) * 100 for t in all_tickers],
-                name="Current"
+                name="Actuelle",
+                marker_color="#ef5350"
             ), row=2, col=1)
 
-            # --- TABLE ---
+            # Tableau des actions
             table_data = []
             for t in all_tickers:
-                target = final_target.get(t, 0)
+                target = target_alloc.get(t, 0)
                 actual = current_alloc.get(t, 0)
                 diff = target - actual
-
-                action = "REBALANCE" if abs(diff) > 0.05 else "KEEP"
-
-                table_data.append([
-                    t,
-                    f"{actual:.1%}",
-                    f"{target:.1%}",
-                    action
-                ])
+                action = "REBALANCE" if abs(diff) > 0.05 else "MAINTENIR"
+                table_data.append([t, f"{actual:.1%}", f"{target:.1%}", action])
 
             if table_data:
                 fig.add_trace(go.Table(
-                    header=dict(
-                        values=["Ticker", "Current", "Target", "Action"],
-                        fill_color="#263238",
-                        font=dict(color="white")
-                    ),
-                    cells=dict(values=list(zip(*table_data)))
+                    header=dict(values=["Ticker", "Actuel", "Cible", "Action"],
+                                fill_color="#263238", font=dict(color="white")),
+                    cells=dict(values=list(zip(*table_data)),
+                               align="left",
+                               fill_color="#f8f9fa")
                 ), row=2, col=2)
 
             fig.update_layout(
                 template=self.theme,
-                height=850,
-                title=f"Strategic Advisor — {datetime.now().strftime('%Y-%m-%d')}",
-                showlegend=True
+                height=860,
+                title=f"Strategic Advisor — {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02)
             )
 
             self._check_and_export(regime, fig)
-
             return fig
 
         except Exception as e:
-            logger.exception(f"Strategic report error: {e}")
-            return self._create_empty_fig("Erreur stratégique")
+            logger.exception(f"Erreur create_strategic_report: {e}")
+            return self._create_empty_fig("Erreur lors de la génération du rapport stratégique")
 
     # =========================================================
-    # 🔹 PERFORMANCE
-    # =========================================================
-    def create_performance_chart(self) -> go.Figure:
-
-        try:
-            if not self.portfolio.performance_history:
-                return self._create_empty_fig("Aucune donnée performance")
-
-            df = pd.DataFrame(self.portfolio.performance_history)
-
-            df['date'] = pd.to_datetime(df.get('timestamp', df.get('date')))
-            df = df.sort_values('date')
-
-            df["total_value"] = pd.to_numeric(df["total_value"], errors="coerce").ffill()
-
-            rolling_max = df["total_value"].cummax()
-            df["drawdown"] = (df["total_value"] - rolling_max) / rolling_max * 100
-
-            fig = make_subplots(
-                rows=2, cols=1,
-                shared_xaxes=True,
-                row_heights=[0.7, 0.3]
-            )
-
-            fig.add_trace(go.Scatter(
-                x=df['date'],
-                y=df['total_value'],
-                fill="tozeroy",
-                name="Equity"
-            ), row=1, col=1)
-
-            fig.add_trace(go.Scatter(
-                x=df['date'],
-                y=df['drawdown'],
-                fill="tozeroy",
-                name="Drawdown"
-            ), row=2, col=1)
-
-            fig.update_layout(
-                template=self.theme,
-                height=600,
-                hovermode="x unified"
-            )
-
-            return fig
-
-        except Exception as e:
-            logger.exception(e)
-            return self._create_empty_fig("Erreur performance")
-
-    # =========================================================
-    # 🔹 VISUAL REPORT
+    # 2. RAPPORT VISUEL / TECHNIQUE
     # =========================================================
     def create_visual_report(self) -> go.Figure:
+        """Rapport visuel (pie + barres P&L)."""
+        if not self.portfolio or not getattr(self.portfolio, 'positions', None):
+            return self._create_empty_fig("Aucune position à afficher")
 
         try:
-            tickers = list(self.portfolio.positions.keys())
-            prices = self.manager.get_market_prices(tickers) if self.manager else {}
-
-            df_summary = self.portfolio.get_summary(prices)
-            alloc = self.portfolio.get_allocation(prices)
+            prices = self.manager.get_market_prices(list(self.portfolio.positions.keys())) if self.manager else {}
+            df_summary = self.portfolio.get_summary(prices) if hasattr(self.portfolio, 'get_summary') else pd.DataFrame()
+            alloc = self.portfolio.get_allocation(prices) if hasattr(self.portfolio, 'get_allocation') else {}
 
             fig = make_subplots(
                 rows=2, cols=2,
-                specs=[
-                    [{"type": "domain"}, {"type": "bar"}],
-                    [{"type": "scatter"}, {"type": "bar"}]
-                ]
+                specs=[[{"type": "domain"}, {"type": "bar"}],
+                       [{"type": "bar"}, {"type": "bar"}]],
+                subplot_titles=("Répartition du Portefeuille", "P&L par Position (%)", 
+                               "P&L Absolu ($)", "Performance")
             )
 
-            # Allocation
+            # Pie Allocation
             if alloc:
                 fig.add_trace(go.Pie(
                     labels=list(alloc.keys()),
                     values=list(alloc.values()),
-                    hole=0.4
+                    hole=0.45,
+                    textinfo="label+percent"
                 ), row=1, col=1)
 
-            # P&L
+            # Barres P&L
             if not df_summary.empty:
                 fig.add_trace(go.Bar(
-                    x=df_summary["Ticker"],
-                    y=df_summary["P&L %"] * 100
+                    x=df_summary.get("Ticker", []),
+                    y=df_summary.get("P&L %", []) * 100,
+                    marker_color=df_summary.get("P&L %", []).apply(lambda x: "green" if x > 0 else "red")
                 ), row=1, col=2)
 
                 fig.add_trace(go.Bar(
-                    x=df_summary["Ticker"],
-                    y=df_summary["P&L"]
-                ), row=2, col=2)
+                    x=df_summary.get("Ticker", []),
+                    y=df_summary.get("P&L", []),
+                    marker_color="#66bb6a"
+                ), row=2, col=1)
 
-            fig.update_layout(template=self.theme, height=850)
-
+            fig.update_layout(
+                template=self.theme,
+                height=820,
+                showlegend=False
+            )
             return fig
 
         except Exception as e:
-            logger.exception(e)
-            return self._create_empty_fig("Erreur visual report")
+            logger.exception(f"Erreur create_visual_report: {e}")
+            return self._create_empty_fig("Erreur lors de la génération du rapport visuel")
 
     # =========================================================
-    # 🔹 UTILS
+    # 3. RENDU DES RÉSULTATS D'OPTIMISATION (UI)
     # =========================================================
+    def render_optimization_results(self, results: Dict[str, Any]) -> html.Div:
+        """Prépare l'interface des résultats d'optimisation (appelé par le callback)."""
+        if not results:
+            return html.Div("Aucun résultat d'optimisation disponible.", className="alert alert-warning")
+
+        try:
+            children = []
+
+            # Graphique Backtest
+            if "backtest_values" in results and isinstance(results["backtest_values"], pd.Series):
+                fig_backtest = go.Figure(go.Scatter(
+                    x=results["backtest_values"].index,
+                    y=results["backtest_values"],
+                    mode="lines",
+                    fill="tozeroy",
+                    name="Valeur du portefeuille"
+                ))
+                fig_backtest.update_layout(title="Backtest - Évolution de la valeur", height=400, template=self.theme)
+                children.append(html.H5("Courbe de Backtest"))
+                children.append(dcc.Graph(figure=fig_backtest))
+
+            # Métriques
+            if "total_return" in results:
+                metrics = [
+                    ("Rendement total", f"{results.get('total_return', 0):.2%}"),
+                    ("Rendement annualisé", f"{results.get('annualized_return', 0):.2%}"),
+                    ("Volatilité", f"{results.get('volatility', 0):.2%}"),
+                    ("Sharpe Ratio", f"{results.get('sharpe_ratio', 0):.2f}"),
+                    ("Max Drawdown", f"{results.get('max_drawdown', 0):.2%}"),
+                    ("Capital final", f"{results.get('final_capital', 0):,.0f} $"),
+                ]
+                table_rows = [html.Tr([html.Td(label), html.Td(value)]) for label, value in metrics]
+                metrics_table = dbc.Table([html.Tbody(table_rows)], bordered=True, striped=True, size="sm")
+                children.append(html.H5("Métriques de performance", className="mt-4"))
+                children.append(metrics_table)
+
+            # Poids optimaux
+            if "optimal_weights" in results:
+                weights = results["optimal_weights"]
+                weights_df = pd.DataFrame(list(weights.items()), columns=["Ticker", "Poids"])
+                weights_df["Poids"] = weights_df["Poids"].apply(lambda x: f"{x:.2%}")
+                weights_table = dbc.Table.from_dataframe(weights_df, striped=True, bordered=True, hover=True, size="sm")
+                children.append(html.H5("Pondérations optimales", className="mt-4"))
+                children.append(weights_table)
+
+            return html.Div(children, className="mt-3")
+
+        except Exception as e:
+            logger.exception(f"Erreur render_optimization_results: {e}")
+            return html.Div(f"Erreur d'affichage des résultats : {str(e)}", className="alert alert-danger")
+
+    # =========================================================
+    # UTILS
+    # =========================================================
+    def _create_empty_fig(self, message: str) -> go.Figure:
+        """Figure vide avec message explicatif."""
+        fig = go.Figure()
+        fig.add_annotation(
+            text=message,
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16, color="#6c757d")
+        )
+        fig.update_layout(template=self.theme, height=600)
+        return fig
+
     def _check_and_export(self, regime: str, fig: go.Figure):
+        """Export optionnel en cas de changement de régime (debug/production)."""
         try:
             if self.last_regime and self.last_regime != regime:
                 os.makedirs("reports", exist_ok=True)
-                filename = f"reports/regime_{datetime.now().strftime('%Y%m%d_%H%M')}.html"
+                filename = f"reports/regime_change_{datetime.now().strftime('%Y%m%d_%H%M')}.html"
                 fig.write_html(filename)
-                logger.warning(f"🚨 Regime change → report saved: {filename}")
+                logger.info(f"Rapport régime sauvegardé : {filename}")
             self.last_regime = regime
         except Exception:
             pass
-
-    def _create_empty_fig(self, msg: str) -> go.Figure:
-        fig = go.Figure()
-        fig.add_annotation(
-            text=msg,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            font=dict(size=18)
-        )
-        fig.update_layout(template=self.theme)
-        return fig
