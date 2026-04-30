@@ -1,5 +1,6 @@
 """
 Module avancé pour les prédictions et trading d'actions
+Compatible avec la nouvelle architecture data_extraction (classes spécialisées)
 """
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
@@ -18,8 +19,12 @@ from sklearn.preprocessing import StandardScaler
 import warnings
 warnings.filterwarnings('ignore')
 
-# Import des modules internes
-from trading_algo.data.data_extraction import StockDataExtractor, get_stock_overview, MacroDataExtractor
+# Import des modules internes (data_extraction refactorisé)
+from trading_algo.data.data_extraction import (
+    StockDataExtractor,
+    MacroDataExtractor,
+    get_stock_overview
+)
 from trading_algo.visualization.symbol_dashboard import AdvancedTradingDashboard
 from trading_algo.models.base_model import ImprovedLSTMPredictorMultiOutput
 from trading_algo.models.stockmodeltrain import StockModelTrain
@@ -38,7 +43,7 @@ class StockPredictor(StockModelTrain):
         self.risk_tolerance = 0.1
         self.risk_manager = RiskManager()
         self.risk_metrics = None
-        self.market_data_extractor = StockDataExtractor()  # Pour récupérer les données de marché
+        self.market_data_extractor = StockDataExtractor()  # Pour récupérer les données de marché (indices)
         logger.info(f"StockPredictor avancé initialisé pour {symbol}")
 
     def analyze_stock_advanced(self) -> Dict[str, Any]:
@@ -230,7 +235,7 @@ class StockPredictor(StockModelTrain):
             predictions = self._generate_predictions(
                 features_df,
                 days_ahead,
-                method=ensemble_method   # Correction : utilise ensemble_method au lieu de ensemble_quality
+                method=ensemble_method
             )
 
             # --- Interpolation des prédictions ponctuelles ---
@@ -728,7 +733,6 @@ class StockPredictor(StockModelTrain):
                 return {}
 
             last_row = self.features.iloc[-1]
-            # Mapping pour potentiellement ajouter des descriptions ou arrondis spécifiques
             key_indicators = {
                 'RSI': 'Relative Strength Index',
                 'MACD': 'Moving Average Convergence Divergence',
@@ -752,10 +756,8 @@ class StockPredictor(StockModelTrain):
         """Récupère le contexte macro-économique avec gestion des erreurs par service."""
         context = {}
         try:
-            # On utilise les instances déjà existantes si possible pour économiser les ressources
             macro = getattr(self, 'macro_extractor', MacroDataExtractor())
 
-            # Appels isolés pour éviter qu'une erreur sur un service ne bloque tout le contexte
             try:
                 context["market_indicators"] = self.market_data_extractor.get_market_indicators()
             except Exception:
@@ -790,7 +792,6 @@ def main():
     symbol = "AAPL"
 
     try:
-        # Initialisation SANS account_balance (paramètre non prévu dans __init__)
         predictor = StockPredictor(symbol, period="3y")
 
         print(f"\n[1/3] 📡 Récupération des données et entraînement pour {symbol}...")
@@ -800,7 +801,6 @@ def main():
             print(f"❌ Échec de l'analyse: {results['error']}")
             return
 
-        # --- AFFICHAGE DES RÉSULTATS ---
         print(f"\n[2/3] 📊 Synthèse du Signal")
         print("-" * 30)
         print(f"🔹 Prix actuel      : ${results['current_price']:.2f}")
@@ -809,7 +809,6 @@ def main():
 
         print(f"\n[3/3] 🛡️ Gestion du Risque (Horizon Court Terme)")
         risk = results.get('risk_metrics', {})
-        # Correction: les stop_loss sont dans un dictionnaire par horizon
         stop_loss_dict = risk.get('stop_loss_levels', {})
         take_profit_dict = risk.get('take_profit_levels', {})
         pos_size_dict = risk.get('suggested_position_sizes', {})
@@ -817,7 +816,6 @@ def main():
         if '1d' in stop_loss_dict:
             print(f"📉 Stop-Loss suggéré : ${stop_loss_dict['1d']}")
             print(f"📈 Take-Profit cible : ${take_profit_dict.get('1d', 'N/A')}")
-            print(f"💰 Taille position   : {pos_size_dict.get('1d', 'N/A')} unités")
             pos = pos_size_dict.get('1d', {})
             if pos:
                 print(f"💰 Taille position   : {pos.get('units', 'N/A'):.0f} unités")

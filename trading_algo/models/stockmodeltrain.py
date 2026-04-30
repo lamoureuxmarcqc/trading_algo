@@ -1,5 +1,6 @@
 """
-Module principal pour les prédictions et trading d'actions - Version optimisée
+Module principal pour les prédictions et trading d'actions - Version compatible avec la nouvelle architecture data_extraction
+Classes spécialisées : StockDataExtractor, FundamentalExtractor, MacroDataExtractor, etc.
 """
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
@@ -19,7 +20,14 @@ import tensorflow as tf
 from tensorflow import keras
 from sklearn.preprocessing import StandardScaler
 
-from trading_algo.data.data_extraction import StockDataExtractor, get_stock_overview, MacroDataExtractor
+from trading_algo.data.data_extraction import (
+    StockDataExtractor,
+    MacroDataExtractor,
+    FundamentalExtractor,
+    SentimentExtractor,
+    fetch_stock_data,
+    get_stock_overview
+)
 from trading_algo.models.base_model import ImprovedLSTMPredictorMultiOutput
 
 logger = logging.getLogger(__name__)
@@ -29,7 +37,7 @@ tf.get_logger().setLevel('ERROR')
 class StockModelTrain:
     """
     Classe principale pour les prédictions d'actions avec IA
-    Version optimisée : log cibles, lookback 90, architecture LSTM profonde
+    Version optimisée, compatible avec la nouvelle architecture data_extraction.
     """
 
     def __init__(self, symbol: str, period: str = "3y"):
@@ -43,9 +51,11 @@ class StockModelTrain:
         self.target_columns = None
         self.current_price = 0.0
 
-        # Extracteurs
+        # Extracteurs (utiliser les nouvelles classes)
         self.data_extractor = StockDataExtractor(symbol)
         self.macro_extractor = MacroDataExtractor()
+        self.fundamental_extractor = FundamentalExtractor()
+        self.sentiment_extractor = SentimentExtractor()
 
         # Scalers
         self.feature_scaler = StandardScaler()
@@ -81,10 +91,10 @@ class StockModelTrain:
             return False
 
     def fetch_data(self, forecast_horizon: int = 1) -> bool:
-        """Récupère et prépare les données pour l'analyse"""
+        """Récupère et prépare les données pour l'analyse en utilisant fetch_stock_data (refactorisé)."""
         try:
             logger.info(f"Récupération des données pour {self.symbol}")
-            all_data = self.data_extractor.get_all_data(symbol=self.symbol, period=self.period)
+            all_data = fetch_stock_data(symbol=self.symbol, period=self.period, include_technicals=True)
             if all_data is None or not isinstance(all_data, dict) or 'historical' not in all_data:
                 logger.error("Données historiques manquantes")
                 return False
@@ -96,11 +106,13 @@ class StockModelTrain:
 
             self.data = historical_data
 
+            # Utiliser les indicateurs techniques pré-calculés si disponibles
             if 'technical' in all_data and all_data['technical'] is not None and not all_data['technical'].empty:
                 self.features = all_data['technical']
             else:
                 self.features = self.data_extractor.calculate_technical_indicators(self.data)
 
+            # Utiliser les cibles pré-calculées si disponibles
             if 'targets' in all_data and all_data['targets'] is not None and not all_data['targets'].empty:
                 self.targets = all_data['targets']
             else:
@@ -114,24 +126,20 @@ class StockModelTrain:
 
             self.current_price = float(self.data['Close'].iloc[-1])
 
-            # --- Transformation logarithmique des cibles (prix -> log prix) ---
+            # Transformation logarithmique des cibles (prix -> log prix)
             target_cols = [c for c in self.targets.columns if 'Target_Close' in c]
             for col in target_cols:
                 self.targets[col] = np.log(self.targets[col])
 
-            # Normalisation des features
-
+            # Sauvegarde des colonnes pour référence ultérieure
             if self.features is not None and not self.features.empty:
-                # self.feature_scaler.fit(self.features)
                 self.feature_columns = self.features.columns.tolist()
-
             if self.targets is not None and not self.targets.empty:
-                # self.target_scaler.fit(self.targets.dropna())
                 self.target_columns = self.targets.columns.tolist()
 
             logger.info(f"Données récupérées: {len(self.data)} périodes")
-            logger.info(f"Features: {self.features.shape}")
-            logger.info(f"Cibles (log): {self.targets.shape}")
+            logger.info(f"Features: {self.features.shape if self.features is not None else 'None'}")
+            logger.info(f"Cibles (log): {self.targets.shape if self.targets is not None else 'None'}")
             logger.info(f"Prix actuel: ${self.current_price:.2f}")
 
             return True
@@ -192,12 +200,11 @@ class StockModelTrain:
             y_train_df = y_df.iloc[:split_idx]
             y_test_df = y_df.iloc[split_idx:]
 
-            # --- Fit des scalers UNIQUEMENT sur l'entraînement ---
+            # Fit des scalers UNIQUEMENT sur l'entraînement
             self.feature_scaler.fit(X_train_df)
             self.target_scaler.fit(y_train_df)
-            # ----------------------------------------------------
 
-            # Sauvegarde des colonnes (déjà fait dans fetch_data, mais au cas où)
+            # Sauvegarde des colonnes
             self.feature_columns = X_train_df.columns.tolist()
             self.target_columns = y_train_df.columns.tolist()
             logger.info(f"Colonnes des features sauvegardées: {len(self.feature_columns)}")
@@ -222,7 +229,7 @@ class StockModelTrain:
             return X_train_seq, y_train_seq, X_test_seq, y_test_seq
 
         except Exception as e:
-            logger.error(f"Erreur prepare_training_data: {e}")
+            logger.error(f"Erreur prepare_training_data: {e}", exc_info=True)
             return None, None, None, None
 
     def _create_sequences(self, X: np.ndarray, y: np.ndarray, lookback_days: int) -> Tuple:
@@ -363,7 +370,7 @@ class StockModelTrain:
             logger.info(f"Données d'entraînement: {X_train.shape[0]} échantillons, {n_outputs} cibles")
             logger.info(f"Données de test: {X_test.shape[0]} échantillons")
 
-            # Architecture plus puissante (même pour petit dataset)
+            # Architecture plus puissante
             self.model = ImprovedLSTMPredictorMultiOutput(
                 lstm_units1=128,
                 lstm_units2=64,
@@ -580,6 +587,7 @@ class StockModelTrain:
         Vérifie la compatibilité des colonnes features avant d'accepter le modèle.
         Retourne True si un modèle compatible a été chargé.
         """
+
         try:
             import glob
             model_dirs = [f"models_saved/{self.symbol}", "models_saved/batch"]
@@ -595,28 +603,62 @@ class StockModelTrain:
             logger.info(f"Modèle chargé depuis {latest_model}")
 
             scaler_dir = os.path.dirname(latest_model)
-            feat_files = glob.glob(os.path.join(scaler_dir, "feature_scaler_*.pkl"))
-            targ_files = glob.glob(os.path.join(scaler_dir, "target_scaler_*.pkl"))
-            if feat_files:
-                with open(max(feat_files, key=os.path.getmtime), 'rb') as f:
-                    self.feature_scaler = pickle.load(f)
-            if targ_files:
-                with open(max(targ_files, key=os.path.getmtime), 'rb') as f:
-                    self.target_scaler = pickle.load(f)
 
-            meta_files = glob.glob(os.path.join(scaler_dir, "*metadata_*.json"))
-            if meta_files:
-                with open(max(meta_files, key=os.path.getmtime), 'r') as f:
+            # --- RECHERCHE DES SCALERS (avec priorité au préfixe symbole) ---
+            # Feature scaler
+            feat_patterns = [
+                f"{self.symbol}_feature_scaler_*.pkl",
+                "feature_scaler_*.pkl"
+            ]
+            feat_file = None
+            for pattern in feat_patterns:
+                matches = glob.glob(os.path.join(scaler_dir, pattern))
+                if matches:
+                    feat_file = max(matches, key=os.path.getmtime)
+                    break
+            if feat_file:
+                with open(feat_file, 'rb') as f:
+                    self.feature_scaler = pickle.load(f)
+                logger.info(f"Feature scaler chargé depuis {feat_file}")
+            else:
+                logger.warning("Aucun feature scaler trouvé, le scaler restera non fitté")
+
+            # Target scaler
+            targ_patterns = [
+                f"{self.symbol}_target_scaler_*.pkl",
+                "target_scaler_*.pkl"
+            ]
+            targ_file = None
+            for pattern in targ_patterns:
+                matches = glob.glob(os.path.join(scaler_dir, pattern))
+                if matches:
+                    targ_file = max(matches, key=os.path.getmtime)
+                    break
+            if targ_file:
+                with open(targ_file, 'rb') as f:
+                    self.target_scaler = pickle.load(f)
+                logger.info(f"Target scaler chargé depuis {targ_file}")
+            else:
+                logger.warning("Aucun target scaler trouvé")
+
+            # Métadonnées (optionnel)
+            meta_patterns = [
+                f"{self.symbol}_metadata_*.json",
+                "*metadata_*.json"
+            ]
+            meta_file = None
+            for pattern in meta_patterns:
+                matches = glob.glob(os.path.join(scaler_dir, pattern))
+                if matches:
+                    meta_file = max(matches, key=os.path.getmtime)
+                    break
+            if meta_file:
+                with open(meta_file, 'r') as f:
                     meta = json.load(f)
                 self.feature_columns = meta.get('feature_columns', [])
                 self.target_columns = meta.get('target_columns', [])
                 self.lookback_days = meta.get('lookback_days', self.lookback_days)
-
-            # Si les colonnes ne sont pas encore définies, tenter de les inférer
-            if not self.feature_columns and self.features is not None:
-                self.feature_columns = list(self.features.columns)
-            if not self.target_columns and self.targets is not None:
-                self.target_columns = list(self.targets.columns)
+                logger.info("Métadonnées chargées")
 
             # Vérification de compatibilité
             if self.features is not None and self.feature_columns:
@@ -766,7 +808,7 @@ class StockModelTrain:
             return {"error": str(e), "symbol": self.symbol}
 
     def create_dashboard(self):
-        """Crée un tableau de bord interactif (affichage console)"""
+        """Crée un tableau de bord interactif (affichage console) - à adapter si nécessaire"""
         if not self.analysis_results:
             self.analyze_model_stock()
         logger.info(f"\n📊 DASHBOARD POUR {self.symbol}")
@@ -783,7 +825,7 @@ class StockModelTrain:
         logger.info("\nNote: Le dashboard interactif sera disponible avec le module dashboard.py")
 
     # ------------------------------------------------------------------
-    # Méthodes pour l'entraînement par générateur (streaming)
+    # Méthodes pour l'entraînement par générateur (streaming) - inchangées
     # ------------------------------------------------------------------
     @staticmethod
     def _sequence_batch_generator_from_arrays(X: np.ndarray, y: np.ndarray,

@@ -1,75 +1,127 @@
-﻿/* python trading_algo/web_dashboard/assets/custom.css */
-/* Ensure market summary cards are visible and not overlapped */
+﻿/* =========================================================
+   Base & réinitialisation des cartes marché
+   ========================================================= */
 .market-card {
     display: inline-block;
     vertical-align: top;
     margin: 6px;
     z-index: 10;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-    border-radius: 4px;
+    border-radius: 8px; /* plus arrondi */
+    transition: transform 0.1s ease;
 }
 
-/* Prevent plotly overlay hiding cards */
-.container-fluid .row > .card {
-    overflow: visible;
-}
-
-/* Small responsive tweaks */
-@media (max-width: 768px) {
-    .market-card {
-        min-width: 120px;
-        font-size: 0.9rem;
+    .market-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.12);
     }
-}
 
-.nav-tabs .nav-link {
-    color: #000 !important;
-    background-color: #fff !important;
-    border: 1px solid #dee2e6 !important;
-}
-
-.nav-tabs .nav-link.active {
-    color: #0d6efd !important;
-    background-color: #e9ecef !important;
-    border-bottom-color: #fff !important;
+/* Éviter les débordements Plotly */
+.container-fluid .row > .card,
+.plotly-graph-div {
+    overflow: visible !important;
 }
 
 /* =========================================================
-   Onglets plus hauts et mieux visibles
+   Responsive : cartes marché sur mobile
+   ========================================================= */
+@media (max-width: 768px) {
+    .market-card {
+        min-width: 100px;
+        font-size: 0.8rem;
+        margin: 4px;
+    }
+}
+
+/* =========================================================
+   Onglets (tabs) – version améliorée
    ========================================================= */
 .nav-tabs {
     border-bottom: 2px solid #dee2e6;
-    margin-bottom: 1rem;
+    margin-bottom: 1.25rem;
+    gap: 4px; /* espacement entre onglets */
 }
 
     .nav-tabs .nav-link {
-        padding: 12px 24px !important; /* Augmente la hauteur */
-        font-size: 1.1rem !important;
+        padding: 12px 24px !important;
+        font-size: 1rem !important;
         font-weight: 600 !important;
         color: #2c3e50 !important;
         background-color: #f8f9fa !important;
         border: 1px solid #dee2e6 !important;
         border-bottom: none !important;
-        margin-right: 4px !important;
+        border-radius: 8px 8px 0 0 !important;
         transition: all 0.2s ease;
     }
 
         .nav-tabs .nav-link:hover {
             background-color: #e9ecef !important;
             color: #0d6efd !important;
+            border-color: #cbd5e1 !important;
         }
 
         .nav-tabs .nav-link.active {
             background-color: #ffffff !important;
             color: #0d6efd !important;
             border-bottom: 2px solid #0d6efd !important;
-            transform: translateY(-2px);
+            transform: translateY(-1px);
+            box-shadow: 0 -2px 4px rgba(0,0,0,0.02);
         }
 
-/* Pour les écrans petits, réduire un peu */
+/* Ajustement pour petits écrans */
 @media (max-width: 768px) {
     .nav-tabs .nav-link {
         padding: 8px 12px !important;
-        font-size: 0.9rem !important;
+        font-size: 0.85rem !important;
     }
+}
+
+/* =========================================================
+   Tables (positions, etc.)
+   ========================================================= */
+.table-sm th {
+    position: sticky;
+    top: 0;
+    background-color: #f1f3f5;
+    z-index: 5;
+}
+
+.table-sm td, .table-sm th {
+    vertical-align: middle;
+    padding: 0.5rem;
+}
+
+.table-hover tbody tr:hover {
+    background-color: #f8f9fa !important;
+}
+
+/* =========================================================
+   Alertes & messages
+   ========================================================= */
+.alert {
+    border-radius: 12px;
+    border-left: 5px solid;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+/* =========================================================
+   Graphiques Plotly : fond cohérent
+   ========================================================= */
+/* Forcer un fond blanc pour tous les graphiques Plotly */
+/*.js-plotly-plot .plotly .main-svg {
+    background-color: #ffffff !important;
+}
+/*
+/* Conteneur des onglets */
+.tab-content {
+    background-color: #ffffff;
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+#tabs-content, .tab-content, .tab-pane {
+    background-color: #FFFFFF !important;
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid #E0E4E8;
 }
