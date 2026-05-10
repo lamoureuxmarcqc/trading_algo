@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hedge Fund Platform Terminal</title>
+    <link rel="icon" href="/terminal-assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/terminal-assets/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero panel">
+        <div>
+          <p class="eyebrow">Institutional Terminal</p>
+          <h1>Hedge Fund Platform</h1>
+          <p class="subtitle">
+            Portfolio, risk, signals and order entry served directly by the FastAPI core.
+          </p>
+        </div>
+        <div class="hero-actions">
+          <a class="button secondary" href="/docs">API Docs</a>
+          <button id="refresh-button" class="button secondary" type="button">Refresh Prices</button>
+          <span id="connection-badge" class="badge">Loading...</span>
+        </div>
+      </header>
+
+      <section class="metrics" id="metrics"></section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">CIO Dashboard</p>
+            <h2>NAV History</h2>
+          </div>
+          <span id="history-range" class="micro">Last 30 snapshots</span>
+        </div>
+        <div class="history-grid">
+          <div class="history-chart-wrap">
+            <svg id="nav-sparkline" class="sparkline" viewBox="0 0 720 220" preserveAspectRatio="none"></svg>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Recorded</th>
+                  <th>NAV</th>
+                  <th>Cash</th>
+                  <th>Gross</th>
+                </tr>
+              </thead>
+              <tbody id="history-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid two-up">
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Signals</p>
+              <h2>Opportunity Tape</h2>
+            </div>
+            <span id="updated-at" class="micro">--:--:-- UTC</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Price</th>
+                  <th>Buy Prob.</th>
+                  <th>Target</th>
+                  <th>Confidence</th>
+                  <th>Regime</th>
+                </tr>
+              </thead>
+              <tbody id="signals-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Execution</p>
+              <h2>Create Order</h2>
+            </div>
+          </div>
+          <form id="order-form" class="order-form">
+            <label>
+              Symbol
+              <input name="symbol" value="AAPL" required />
+            </label>
+            <label>
+              Side
+              <select name="side">
+                <option value="BUY">BUY</option>
+                <option value="SELL">SELL</option>
+              </select>
+            </label>
+            <label>
+              Order Type
+              <select name="order_type">
+                <option value="market">market</option>
+                <option value="limit" selected>limit</option>
+                <option value="stop">stop</option>
+              </select>
+            </label>
+            <label>
+              Quantity
+              <input name="quantity" type="number" step="1" min="1" value="25" required />
+            </label>
+            <label>
+              Limit Price
+              <input name="limit_price" type="number" step="0.01" value="190.00" />
+            </label>
+            <label>
+              Stop Price
+              <input name="stop_price" type="number" step="0.01" />
+            </label>
+            <label>
+              Broker
+              <input name="broker" value="paper" />
+            </label>
+            <label>
+              Strategy Tag
+              <input name="strategy_tag" value="manual" />
+            </label>
+            <button class="button primary" type="submit">Send Order</button>
+          </form>
+          <pre id="order-result" class="result-box">No order submitted yet.</pre>
+        </div>
+      </section>
+
+      <section class="grid two-up">
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Portfolio</p>
+              <h2>Positions</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Market Value</th>
+                  <th>Unrealized PnL</th>
+                </tr>
+              </thead>
+              <tbody id="positions-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Risk</p>
+              <h2>Scenario Stress</h2>
+            </div>
+          </div>
+          <div class="stack" id="risk-stack"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Position Risk</p>
+            <h2>Beta, VaR and Liquidity</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Beta</th>
+                <th>VaR 95</th>
+                <th>CVaR 95</th>
+                <th>Liquidity</th>
+                <th>Weight</th>
+              </tr>
+            </thead>
+            <tbody id="position-risk-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Orders</p>
+            <h2>Recent Orders</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Status</th>
+                <th>Type</th>
+                <th>Qty</th>
+                <th>Broker</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="orders-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Fills</p>
+            <h2>Execution Tape</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Order ID</th>
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th>Price</th>
+                <th>Venue</th>
+                <th>Filled At</th>
+              </tr>
+            </thead>
+            <tbody id="fills-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="grid two-up">
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Research</p>
+              <h2>Screener</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Sector</th>
+                  <th>Buy Prob.</th>
+                  <th>Exp. Return</th>
+                  <th>Factor</th>
+                  <th>Regime</th>
+                </tr>
+              </thead>
+              <tbody id="research-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Research</p>
+              <h2>Sector Rotation</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Sector</th>
+                  <th>Buy Prob.</th>
+                  <th>Exp. Return</th>
+                  <th>Factor</th>
+                  <th>Stance</th>
+                </tr>
+              </thead>
+              <tbody id="sector-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Research</p>
+            <h2>Factor Ranking</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Sector</th>
+                <th>Momentum</th>
+                <th>Quality</th>
+                <th>Volatility</th>
+                <th>Overall</th>
+              </tr>
+            </thead>
+            <tbody id="factors-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="grid two-up">
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Admin</p>
+              <h2>Users</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Role</th>
+                  <th>Email</th>
+                  <th>MFA</th>
+                </tr>
+              </thead>
+              <tbody id="users-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Audit</p>
+              <h2>Activity Feed</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Event</th>
+                  <th>Actor</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="audit-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script src="/terminal-assets/app.js"></script>
+  </body>
+</html>

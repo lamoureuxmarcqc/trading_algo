@@ -60,6 +60,7 @@ class StockModelTrain:
         # Scalers
         self.feature_scaler = StandardScaler()
         self.target_scaler = StandardScaler()
+        self.use_target_scaler = False 
 
         # Résultats
         self.analysis_results = {}
@@ -67,7 +68,7 @@ class StockModelTrain:
         self.recommendation = "NEUTRE"
 
         # Hyperparamètres améliorés
-        self.lookback_days = 90          # fenêtre augmentée
+        self.lookback_days = 120          # fenêtre augmentée
         self.sequence_length = 90
         self.batch_size = 32
         self.patience_early_stopping = 20
@@ -126,10 +127,11 @@ class StockModelTrain:
 
             self.current_price = float(self.data['Close'].iloc[-1])
 
-            # Transformation logarithmique des cibles (prix -> log prix)
-            target_cols = [c for c in self.targets.columns if 'Target_Close' in c]
-            for col in target_cols:
-                self.targets[col] = np.log(self.targets[col])
+            # *** CORRECTION : les cibles sont déjà en logarithme (créées dans create_target_columns).
+            # On n'applique PAS de second np.log() pour éviter double log.
+            # La transformation logarithmique suivante est donc SUPPRIMÉE.
+            # (Commentaire conservé pour référence)
+            # Transformation logarithmique des cibles (prix -> log prix) – déjà effectuée dans create_target_columns !
 
             # Sauvegarde des colonnes pour référence ultérieure
             if self.features is not None and not self.features.empty:
@@ -168,9 +170,8 @@ class StockModelTrain:
             return False
 
     def prepare_training_data(self, lookback_days: int = None, train_split: float = 0.8) -> Tuple:
-        """
-        Prépare les données pour l'entraînement.
-        Utilise self.lookback_days par défaut.
+        """Prépare les données pour l'entraînement.
+           Les cibles ne sont PAS normalisées (log prix bruts).
         """
         if lookback_days is None:
             lookback_days = self.lookback_days
@@ -200,26 +201,28 @@ class StockModelTrain:
             y_train_df = y_df.iloc[:split_idx]
             y_test_df = y_df.iloc[split_idx:]
 
-            # Fit des scalers UNIQUEMENT sur l'entraînement
+            # Fit du feature scaler (sur l'entraînement uniquement)
             self.feature_scaler.fit(X_train_df)
-            self.target_scaler.fit(y_train_df)
 
             # Sauvegarde des colonnes
             self.feature_columns = X_train_df.columns.tolist()
             self.target_columns = y_train_df.columns.tolist()
-            logger.info(f"Colonnes des features sauvegardées: {len(self.feature_columns)}")
+            logger.info(f"Colonnes features sauvegardées: {len(self.feature_columns)}")
             logger.info(f"Colonnes cibles sauvegardées: {len(self.target_columns)}")
 
             if len(X_train_df) < lookback_days + 10:
                 logger.warning("Données insuffisantes pour l'entraînement")
                 return None, None, None, None
 
-            # Transformation avec les scalers fittés sur l'entraînement
+            # Transformation des features
             X_train = self.feature_scaler.transform(X_train_df.values)
             X_test = self.feature_scaler.transform(X_test_df.values)
-            y_train = self.target_scaler.transform(y_train_df.values)
-            y_test = self.target_scaler.transform(y_test_df.values)
 
+            # Cibles : pas de scaling
+            y_train = y_train_df.values.astype(np.float32)
+            y_test = y_test_df.values.astype(np.float32)
+
+            # Création des séquences
             X_train_seq, y_train_seq = self._create_sequences(X_train, y_train, lookback_days)
             X_test_seq, y_test_seq = self._create_sequences(X_test, y_test, lookback_days)
 
@@ -233,7 +236,7 @@ class StockModelTrain:
             return None, None, None, None
 
     def _create_sequences(self, X: np.ndarray, y: np.ndarray, lookback_days: int) -> Tuple:
-        """Crée des séquences pour les modèles LSTM (dtype float32)"""
+        """Crée des séquences LSTM (dtype float32)"""
         if len(X) <= lookback_days:
             return (np.empty((0, lookback_days, X.shape[1]), dtype=np.float32),
                     np.empty((0, y.shape[1]), dtype=np.float32))
@@ -244,6 +247,87 @@ class StockModelTrain:
             y_seq[i - lookback_days] = y[i].astype(np.float32)
         return X_seq, y_seq
 
+    # ------------------------------------------------------------------
+    # Validation et génération adaptées (pas de target_scaler)
+    # ------------------------------------------------------------------
+    def validate_on_test(self, X_test_seq, y_test_seq):
+        """
+        Évalue les performances réelles sur l'ensemble de test (prix réels après exponentiation).
+        Affiche MAE, RMSE et MAPE pour chaque horizon de prix.
+        """
+        if self.model is None:
+            logger.error("Modèle non entraîné")
+            return
+
+        y_pred = self.model.predict(X_test_seq, verbose=0)          # log prix
+        y_pred_price = np.exp(y_pred)                               # prix réels
+        y_true_price = np.exp(y_test_seq)                           # prix réels
+
+        logger.info("=== Validation sur données de test (prix réels) ===")
+        for i, col in enumerate(self.target_columns):
+            if 'Target_Close' in col:
+                pred = y_pred_price[:, i]
+                true = y_true_price[:, i]
+
+                mae = np.mean(np.abs(pred - true))
+                rmse = np.sqrt(np.mean((pred - true) ** 2))
+                mape = np.mean(np.abs((true - pred) / true)) * 100
+
+                logger.info(f"{col}: MAE = ${mae:.2f}, RMSE = ${rmse:.2f}, MAPE = {mape:.1f}%")
+                # Exemples
+                for j in range(min(3, len(pred))):
+                    logger.info(f"  Exemple {j}: Prédit=${pred[j]:.2f}, Réel=${true[j]:.2f}")
+
+    # ------------------------------------------------------------------
+    # generate_predictions adaptée
+    # ------------------------------------------------------------------
+    def generate_predictions(self) -> Dict[str, Any]:
+        """Génère les prédictions pour les horizons 1d,5d,10d,20d,30d,90d (prix réels)"""
+        try:
+            if self.model is None or self.features is None:
+                logger.error("Modèle ou features non disponibles")
+                return {}
+
+            if not self.feature_columns:
+                logger.error("Aucune colonne de features sauvegardée.")
+                return {}
+
+            missing = set(self.feature_columns) - set(self.features.columns)
+            if missing:
+                logger.error(f"Colonnes manquantes dans features: {missing}")
+                return {}
+
+            features_aligned = self.features[self.feature_columns]
+            if len(features_aligned) < self.lookback_days:
+                logger.error(f"Pas assez de données: besoin de {self.lookback_days} jours, disponible {len(features_aligned)}")
+                return {}
+
+            recent_data = features_aligned.iloc[-self.lookback_days:]
+            scaled_data = self.feature_scaler.transform(recent_data)
+            X_pred = scaled_data.reshape(1, self.lookback_days, -1)
+
+            y_pred = self.model.predict(X_pred, verbose=0)  # log prix
+
+            # Exponentiation pour prix réels
+            pred_dict = {}
+            for i, col in enumerate(self.target_columns):
+                if 'Target_Close' in col:
+                    pred_dict[col] = float(np.exp(y_pred[0, i]))   # exp(log) = prix
+                else:
+                    pred_dict[col] = float(y_pred[0, i])   # autres cibles (rendement, direction, volatilité)
+
+            horizons = [1, 5, 10, 20, 30, 90]
+            predictions = {}
+            for days in horizons:
+                col = f'Target_Close_{days}d'
+                predictions[f'{days}d'] = pred_dict.get(col, None)
+
+            logger.info(f"Prédictions extraites: {predictions}")
+            return predictions
+
+        except Exception as e:
+            logger.error(f"Erreur generate_predictions: {e}")
+            return {}
     def export_training_data(self, filename: str = None) -> str:
         """
         Exporte les données préparées pour l'entraînement dans un fichier Excel.
@@ -376,7 +460,7 @@ class StockModelTrain:
                 lstm_units2=64,
                 lstm_units3=32,
                 dense_units=64,
-                dropout_rate=0.3,
+                dropout_rate=0,
                 recurrent_dropout=0.2,
                 l2_reg=0.001,
                 n_outputs=n_outputs,
@@ -459,7 +543,7 @@ class StockModelTrain:
         except Exception as e:
             logger.error(f"Erreur lors de l'entraînement: {e}", exc_info=True)
             return False
-
+    '''
     def validate_on_test(self, X_test_seq, y_test_seq):
         """Évalue les performances réelles sur l'ensemble de test (prix réels après exponentiation)"""
         if self.model is None:
@@ -484,7 +568,7 @@ class StockModelTrain:
                 logger.info(f"{col}: MAE = ${mae:.2f}, MAPE = {mape:.1f}%")
                 for j in range(min(3, len(y_pred))):
                     logger.info(f"  Exemple {j}: Prédit=${y_pred[j, i]:.2f}, Réel=${y_true[j, i]:.2f}")
-
+    '''
     def train_on_arrays(self, X_train: np.ndarray, y_train: np.ndarray,
                         X_val: Optional[np.ndarray] = None, y_val: Optional[np.ndarray] = None,
                         epochs: int = 50, batch_size: int = 32,
@@ -523,7 +607,94 @@ class StockModelTrain:
         except Exception as e:
             logger.error(f"Erreur train_on_arrays: {e}", exc_info=True)
             raise
+    def load_model_if_exists(self) -> bool:
+        """
+        Recherche et charge le modèle le plus récent pour ce symbole.
+        Vérifie la compatibilité des colonnes features avant d'accepter le modèle.
+        """
+        import glob
+        try:
+            model_dirs = [f"models_saved/{self.symbol}", "models_saved/batch"]
+            candidates = []
+            for d in model_dirs:
+                if os.path.isdir(d):
+                    candidates.extend(glob.glob(os.path.join(d, "*.keras")))
+            if not candidates:
+                return False
 
+            latest_model = max(candidates, key=os.path.getmtime)
+            self.model = tf.keras.models.load_model(latest_model)
+            logger.info(f"Modèle chargé depuis {latest_model}")
+
+            # Chargement des scalers (feature obligatoire, target optionnel)
+            scaler_dir = os.path.dirname(latest_model)
+            feat_file = None
+            for pattern in [f"{self.symbol}_feature_scaler_*.pkl", "feature_scaler_*.pkl"]:
+                matches = glob.glob(os.path.join(scaler_dir, pattern))
+                if matches:
+                    feat_file = max(matches, key=os.path.getmtime)
+                    break
+            if feat_file:
+                with open(feat_file, 'rb') as f:
+                    self.feature_scaler = pickle.load(f)
+                logger.info(f"Feature scaler chargé depuis {feat_file}")
+            else:
+                logger.warning("Aucun feature scaler trouvé")
+
+            # Chargement des métadonnées
+            meta_file = None
+            for pattern in [f"{self.symbol}_metadata_*.json", "*metadata_*.json"]:
+                matches = glob.glob(os.path.join(scaler_dir, pattern))
+                if matches:
+                    meta_file = max(matches, key=os.path.getmtime)
+                    break
+            if meta_file:
+                with open(meta_file, 'r') as f:
+                    meta = json.load(f)
+                self.feature_columns = meta.get('feature_columns', [])
+                self.target_columns = meta.get('target_columns', [])
+                self.lookback_days = meta.get('lookback_days', self.lookback_days)
+                logger.info("Métadonnées chargées")
+
+            # Vérification compatibilité
+            if self.features is not None and self.feature_columns:
+                if not set(self.feature_columns).issubset(set(self.features.columns)):
+                    logger.warning("Modèle incompatible: colonnes features manquantes")
+                    self.model = None
+                    return False
+
+            return True
+        except Exception as e:
+            logger.error(f"Erreur load_model_if_exists: {e}", exc_info=True)
+            return False
+
+    def _save_model_and_scalers(self, model, model_dir):
+        """Sauvegarde le modèle, le feature scaler et les métadonnées (target scaler sauvé mais inutilisé)"""
+        if model_dir is None:
+            model_dir = f"models_saved/{self.symbol or 'batch'}"
+        os.makedirs(model_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        model.save(os.path.join(model_dir, f"model_{ts}.keras"))
+        try:
+            with open(os.path.join(model_dir, f"feature_scaler_{ts}.pkl"), "wb") as f:
+                pickle.dump(self.feature_scaler, f)
+            with open(os.path.join(model_dir, f"target_scaler_{ts}.pkl"), "wb") as f:
+                pickle.dump(self.target_scaler, f)  # pour compatibilité
+            # Sauvegarde des métadonnées
+            metadata = {
+                'symbol': self.symbol,
+                'feature_columns': self.feature_columns,
+                'target_columns': self.target_columns,
+                'lookback_days': self.lookback_days,
+                'use_log_target': True,
+                'use_target_scaler': False
+            }
+            with open(os.path.join(model_dir, f"metadata_{ts}.json"), 'w') as f:
+                json.dump(metadata, f, indent=2)
+            logger.info(f"Modèle, scalers et métadonnées sauvegardés dans {model_dir}")
+        except Exception as e:
+            logger.debug(f"Erreur sauvegarde scalers: {e}")
+    '''
     def _save_model_and_scalers(self, model, model_dir):
         """Utilitaire de sauvegarde centralisé"""
         if model_dir is None:
@@ -539,7 +710,7 @@ class StockModelTrain:
             logger.info(f"Modèle et scalers sauvegardés dans {model_dir}")
         except Exception as e:
             logger.debug(f"Erreur sauvegarde scalers: {e}")
-
+    '''
     def _save_metrics(self, metrics: Dict[str, Any], save_dir: str):
         """Sauvegarde les métriques d'entraînement"""
         try:
@@ -580,7 +751,7 @@ class StockModelTrain:
             logger.info(f"Graphique d'entraînement sauvegardé: {plot_path}")
         except Exception as e:
             logger.error(f"Erreur lors de la génération du graphique: {e}")
-
+    '''
     def load_model_if_exists(self) -> bool:
         """
         Recherche et charge le modèle le plus récent pour ce symbole (spécifique ou batch).
@@ -673,7 +844,8 @@ class StockModelTrain:
         except Exception as e:
             logger.error(f"Erreur load_model_if_exists: {e}", exc_info=True)
             return False
-
+    '''
+    '''
     def generate_predictions(self) -> Dict[str, Any]:
         """Génère les prédictions pour les horizons 1d,5d,10d,20d,30d,90d (prix réels)"""
         try:
@@ -722,7 +894,7 @@ class StockModelTrain:
         except Exception as e:
             logger.error(f"Erreur generate_predictions: {e}")
             return {}
-
+    '''
     def calculate_trading_score(self, predictions: Dict[str, Any]) -> float:
         """Calcule un score de trading basé sur les prédictions"""
         try:

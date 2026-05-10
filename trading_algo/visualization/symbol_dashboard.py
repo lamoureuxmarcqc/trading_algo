@@ -7,6 +7,7 @@ Toute la logique métier doit être assurée par un module externe (ex: stock_ma
 import os
 import json
 import logging
+import numpy as np
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
@@ -61,6 +62,7 @@ class AdvancedTradingDashboard:
                   recommendation: Optional[str] = None,
                   training_metrics: Optional[Dict[str, Any]] = None,
                   prediction_examples: Optional[List[Dict[str, Any]]] = None,
+                  monte_carlo_sims: Optional[np.ndarray] = None,  
                   # Support d'appels positionnels (fallback)
                   *args, **kwargs) -> None:
         """
@@ -83,6 +85,7 @@ class AdvancedTradingDashboard:
         self.market_sentiment = market_sentiment or {}
         self.training_metrics = training_metrics
         self.prediction_examples = prediction_examples or []
+        self.monte_carlo_sims = monte_carlo_sims 
 
         if self.technical_data is not None and not self.technical_data.empty:
             try:
@@ -100,6 +103,112 @@ class AdvancedTradingDashboard:
     # --------------------------------------------------------------------------
     # Méthodes de construction des graphiques (UI pure)
     # --------------------------------------------------------------------------
+
+
+    def _add_monte_carlo_chart(self, fig: go.Figure, row: int, col: int) -> None:
+        """
+        Graphique de simulation Monte‑Carlo avec historique.
+        Affiche les 90 derniers jours de prix réels, puis les trajectoires simulées,
+        la médiane et la bande de confiance 5‑95 %.
+        """
+        if self.monte_carlo_sims is None:
+            return
+        sims = self.monte_carlo_sims
+        if sims.ndim != 2:
+            self.logger.warning("monte_carlo_sims doit être un array 2D (n_simulations, n_steps)")
+            return
+
+        horizon_days = sims.shape[1]
+
+        # 1) Prix historique (90 derniers jours si disponibles)
+        hist_df = self.technical_data
+        if hist_df is not None and not hist_df.empty and 'Close' in hist_df.columns:
+            # On prend les 90 derniers jours (ou moins si l'historique est court)
+            hist = hist_df[['Close']].tail(min(90, len(hist_df)))
+            hist_dates = hist.index
+            hist_prices = hist['Close'].values
+            fig.add_trace(
+                go.Scattergl(
+                    x=hist_dates, y=hist_prices,
+                    mode='lines',
+                    name='Prix historique',
+                    line=dict(color='black', width=2)
+                ),
+                row=row, col=col
+            )
+            last_hist_date = hist_dates[-1]
+        else:
+            # Pas d’historique : on part d’aujourd’hui
+            now = pd.Timestamp.now().normalize()
+            last_hist_date = now
+            # On peut ajouter un point zéro pour le prix actuel
+            fig.add_trace(
+                go.Scattergl(
+                    x=[last_hist_date], y=[self.current_price],
+                    mode='markers',
+                    marker=dict(color='black', size=6),
+                    name='Prix actuel'
+                ),
+                row=row, col=col
+            )
+
+        # 2) Dates futures (jours ouvrés)
+        future_dates = pd.date_range(
+            start=last_hist_date + pd.Timedelta(days=1),
+            periods=horizon_days,
+            freq='B'  # jours ouvrés pour respecter le calendrier boursier
+        )
+
+        # 3) Trajectoires simulées (grises, fines)
+        for sim in sims:
+            fig.add_trace(
+                go.Scattergl(
+                    x=future_dates, y=sim,
+                    mode='lines',
+                    line=dict(color='gray', width=0.5),
+                    opacity=0.15,
+                    showlegend=False,
+                    hoverinfo='skip'
+                ),
+                row=row, col=col
+            )
+
+        # 4) Médiane et percentiles
+        median = np.median(sims, axis=0)
+        p5 = np.percentile(sims, 5, axis=0)
+        p95 = np.percentile(sims, 95, axis=0)
+
+        fig.add_trace(
+            go.Scattergl(
+                x=future_dates, y=median,
+                mode='lines',
+                name='Médiane Monte‑Carlo',
+                line=dict(color='blue', width=2.5)
+            ),
+            row=row, col=col
+        )
+        fig.add_trace(
+            go.Scattergl(
+                x=future_dates, y=p95,
+                mode='lines',
+                line=dict(color='rgba(0,100,200,0.3)'),
+                name='95ᵉ percentile',
+                showlegend=False
+            ),
+            row=row, col=col
+        )
+        fig.add_trace(
+            go.Scattergl(
+                x=future_dates, y=p5,
+                mode='lines',
+                fill='tonexty',
+                fillcolor='rgba(0,100,200,0.15)',
+                line=dict(color='rgba(0,100,200,0.3)'),
+                name='5ᵉ percentile',
+                showlegend=False
+            ),
+            row=row, col=col
+        )
 
     def _add_main_price_chart(self, fig: go.Figure, row: int, col: int) -> None:
         """Graphique principal du prix avec bandes de Bollinger et signaux d'achat/vente."""
@@ -577,6 +686,7 @@ class AdvancedTradingDashboard:
                     'Volume',
                     'Moyennes Mobiles',
                     'Volatilité (ATR)',
+                    'Monte‑Carlo (historique + simulations)',
                     'Prévisions IA',
                     'Drawdown Historique',
                     'Sharpe Ratio',
@@ -595,7 +705,12 @@ class AdvancedTradingDashboard:
             self._add_volume_chart(fig, row=3, col=3)
             self._add_trend_chart(fig, row=4, col=1)
             self._add_volatility_chart(fig, row=4, col=2)
-            self._add_predictions_chart(fig, row=4, col=3)
+            # Graphique de prédictions – privilégie Monte Carlo si disponible
+            if self.monte_carlo_sims is not None:
+                self._add_monte_carlo_chart(fig, row=4, col=3)
+            else:
+                self._add_predictions_chart(fig, row=4, col=3)
+            
             self._add_drawdown_chart(fig, row=5, col=1)
             self._add_sharpe_gauge(fig, row=5, col=2)
             self._add_var_gauge(fig, row=5, col=3)

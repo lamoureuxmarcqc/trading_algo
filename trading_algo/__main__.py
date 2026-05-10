@@ -6,6 +6,7 @@ import sys
 import os
 import argparse
 import logging
+import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -122,6 +123,7 @@ def create_stock_dashboard(symbol, predictor, results):
         preds_df = None
         # predictions provided by results (mapping) -> convert to DataFrame if present
         preds_raw = results.get("predictions") if isinstance(results, dict) else None
+        monte_carlo = results.get("monte_carlo_sims") if isinstance(results, dict) else None
         if isinstance(preds_raw, dict) and preds_raw:
             import pandas as pd
             try:
@@ -151,7 +153,8 @@ def create_stock_dashboard(symbol, predictor, results):
                 technical_data=tech_df,
                 predictions_df=preds_df,
                 risk_metrics=risk_metrics,
-                overview=results.get("overview", {})
+                overview=results.get("overview", {}),
+                monte_carlo_sims=monte_carlo   
             )
         except TypeError:
             # fallback to positional

@@ -60,6 +60,10 @@ class StockPredictor(StockModelTrain):
             logger.info("Génération des prédictions avancées...")
             predictions_dict = self.generate_predictions()
 
+            monte_carlo_sims = self._generate_monte_carlo_simulations(
+                predictions_dict,
+                num_simulations=200
+            )
             # Initialisation des métriques de risque
             risk_metrics = {}
 
@@ -150,6 +154,7 @@ class StockPredictor(StockModelTrain):
                 "trading_score": self.trading_score,
                 "recommendation": self.recommendation,
                 "predictions": predictions_dict,
+                "monte_carlo_sims": monte_carlo_sims,   
                 "technical_indicators": self._get_technical_summary(),
                 "risk_metrics": risk_metrics,
                 "market_context": self._get_market_context(),
@@ -314,6 +319,87 @@ class StockPredictor(StockModelTrain):
         except Exception as e:
             logger.error(f"❌ Erreur lors de la prédiction: {str(e)}", exc_info=True)
             return self._handle_prediction_error(e)
+
+    def _generate_monte_carlo_simulations(
+        self,
+        base_predictions: Dict[str, float],
+        num_simulations: int = 200,
+        horizon_days: int = 90
+    ) -> np.ndarray:
+        """
+        Génère des trajectoires de prix via Monte‑Carlo en utilisant les prédictions
+        de rendement (Target_Return_Xd) comme drift.
+        Retourne un tableau (n_simulations, horizon_days) de prix futurs.
+        """
+        if self.current_price <= 0:
+            return np.empty((0, horizon_days))
+
+        # 1. Extraction des rendements prédits pour chaque horizon
+        # On récupère les prédictions déjà calculées (individuelles) depuis l'analyse
+        # Les clés sont du type '1d', '5d', '10d', etc.
+        returns_map = {}
+        # Le modèle prédit aussi Target_Return_Xd, mais dans generate_predictions on n'extrait
+        # que les Close. On va utiliser les prédictions de Close pour en déduire le rendement.
+        # Mieux : on peut récupérer les cibles de rendement directement si on les a stockées.
+        # Simplification : on utilise le ratio prédit / current_price pour avoir le rendement total.
+        for horizon_key, pred_price in base_predictions.items():
+            if pred_price is not None:
+                try:
+                    days = int(horizon_key.replace('d', ''))
+                except ValueError:
+                    continue
+                if days <= 0:
+                    continue
+                returns_map[days] = (pred_price / self.current_price) - 1.0  # rendement total
+
+        if not returns_map:
+            # Fallback : pas de prédictions, on simule avec drift nul
+            drift_daily = 0.0
+        else:
+            # 2. Interpolation des rendements cumulés -> drift journalier
+            horizons = np.array(sorted(returns_map.keys()))
+            cum_returns = np.array([returns_map[h] for h in horizons])
+            # On ajoute le point de départ : jour 0, rendement 0
+            x_interp = np.concatenate([[0], horizons])
+            y_interp = np.concatenate([[0], cum_returns])
+            # Interpolation linéaire des rendements cumulés pour chaque jour jusqu'à horizon_days
+            days_range = np.arange(1, horizon_days + 1)
+            cum_return_interp = np.interp(days_range, x_interp, y_interp)
+            # Le rendement cumulé journalier souhaité (drift) est la différence des cumuls
+            drift_daily_array = np.diff(np.concatenate([[0], cum_return_interp]))
+            # drift_daily_array est maintenant la proportion de croissance journalière désirée.
+            # Pour le brownien géométrique, on travaillera en log-rendements.
+            drift_daily_array = drift_daily_array.astype(float)
+
+        # 3. Volatilité journalière estimée sur les 90 derniers jours ou toute l'historique
+        if self.data is not None and len(self.data) >= 10:
+            returns = self.data['Close'].pct_change().dropna()
+            recent = returns.tail(min(90, len(returns)))
+            daily_vol = recent.std()
+            if daily_vol == 0 or pd.isna(daily_vol):
+                daily_vol = 0.01
+        else:
+            daily_vol = 0.01
+
+        # 4. Simulation de Monte‑Carlo (brownien géométrique avec drift déterministe)
+        dt = 1  # un jour
+        simulations = np.zeros((num_simulations, horizon_days))
+        for i in range(num_simulations):
+            # Génération des chocs aléatoires
+            Z = np.random.normal(0, 1, horizon_days)
+            # Log‑rendements : drift déterministe (en log‑rendement) + choc * vol
+            # On convertit le drift proportionnel en log‑drift : log(1 + drift) ≈ drift pour petits
+            log_drift = np.log(1 + drift_daily_array)  # plus exact
+            log_returns = log_drift + daily_vol * Z
+            # Prix : S_{t+1} = S_t * exp(log_return)
+            price = self.current_price
+            path = np.zeros(horizon_days)
+            for t in range(horizon_days):
+                price = price * np.exp(log_returns[t])
+                path[t] = price
+            simulations[i] = path
+
+        return simulations
 
     def _prepare_prediction_features(self, data: pd.DataFrame, include_sentiment: bool = True) -> pd.DataFrame:
         try:

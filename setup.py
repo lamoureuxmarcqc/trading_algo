@@ -29,7 +29,9 @@ setup(
         "kaleido>=1.2.0",
         "apscheduler>=1.0.0",
         "dotenv>=0.0.1",
-        "seaborn>=0.13.0"
+        "seaborn>=0.13.0",
+        "SQLAlchemy>=0.0.1",
+        "torch>=0.0.1"
     ],
     python_requires=">=3.8",
     extras_require={

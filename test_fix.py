@@ -22,8 +22,8 @@ for p in sys.path:
 
 logger.info("\n" + "="*60)
 
-# Ajouter src au chemin
-src_path = os.path.join(os.path.dirname(__file__), 'src')
+# Ajouter trading_algo au chemin
+src_path = os.path.join(os.path.dirname(__file__), 'trading_algo')
 sys.path.insert(0, src_path)
 
 logger.info(f"\nAjouté au chemin: {src_path}")

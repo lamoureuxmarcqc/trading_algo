@@ -1,0 +1,30 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-ink text-white font-sans;
+  background-image:
+    radial-gradient(circle at top left, rgba(38, 208, 124, 0.14), transparent 24%),
+    radial-gradient(circle at top right, rgba(125, 211, 252, 0.12), transparent 26%),
+    linear-gradient(180deg, #07090d 0%, #0c1118 55%, #101722 100%);
+}
+
+.panel {
+  @apply rounded-3xl border border-line bg-panel/80 shadow-bloom backdrop-blur;
+}
+
+.metric-label {
+  @apply text-xs uppercase tracking-[0.24em] text-slate-400;
+}
+
+.metric-value {
+  @apply mt-3 font-mono text-3xl font-semibold text-white;
+}
+

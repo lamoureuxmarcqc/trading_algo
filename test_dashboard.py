@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-# Ajouter le répertoire src au chemin
+# Ajouter le répertoire trading_algo au chemin
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from trading_algo.visualization.symbol_dashboard import AdvancedTradingDashboard, MiniDashboard

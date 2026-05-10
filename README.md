@@ -6,6 +6,32 @@
 
 **Trading Algo** est une suite logicielle modulaire pour l'analyse financière quantitative. Il combine l'extraction de données massives, le machine learning (LSTM, CatBoost, etc.) et des visualisations interactives pour aider à la décision de trading sur le S&P 500.
 
+## Institutional Platform Layer
+
+Le repo inclut maintenant une fondation "hedge fund platform" prête à étendre autour du moteur `trading_algo` existant :
+
+- [services/api-core/README.md](/C:/Users/marc/source/projet_trading/services/api-core/README.md)
+- [docs/hedgefund-platform.md](/C:/Users/marc/source/projet_trading/docs/hedgefund-platform.md)
+- [infra/docker/docker-compose.hedgefund.yml](/C:/Users/marc/source/projet_trading/infra/docker/docker-compose.hedgefund.yml)
+- [services/api-core/sql/001_init.sql](/C:/Users/marc/source/projet_trading/services/api-core/sql/001_init.sql)
+- [apps/web/app/page.tsx](/C:/Users/marc/source/projet_trading/apps/web/app/page.tsx)
+
+Cette couche apporte :
+
+- une API FastAPI modulaire pour `auth`, `portfolio`, `orders`, `risk`, `signals`
+- un schéma PostgreSQL institutionnel pour users, positions, orders, fills et market data
+- une stack locale Docker PostgreSQL + Redis + API
+- un cockpit frontend Next.js initial aligné sur les pages CIO / trader / risk / research
+- une base de gouvernance institutionnelle via ADRs, standards API et conventions event-driven
+- un cockpit Next.js désormais branché sur `api-core` avec fallback si l'API n'est pas disponible
+
+Standards désormais visibles dans le repo :
+
+- [docs/architecture/README.md](/C:/Users/marc/source/projet_trading/docs/architecture/README.md)
+- [docs/architecture/adr/README.md](/C:/Users/marc/source/projet_trading/docs/architecture/adr/README.md)
+- [docs/architecture/api-governance.md](/C:/Users/marc/source/projet_trading/docs/architecture/api-governance.md)
+- [docs/architecture/event-governance.md](/C:/Users/marc/source/projet_trading/docs/architecture/event-governance.md)
+
 ---
 
 ## 📌 Sommaire
@@ -86,6 +112,9 @@ L'outil s'utilise principalement via la commande globale `trading-algo`.
 | `trading-algo MSFT --mode train` | Entraîne le modèle sur Microsoft. |
 | `trading-algo AAPL,TSLA --mode compare` | Compare les performances de deux titres. |
 | `trading-algo --mode screen` | Recherche les meilleures opportunités du S&P 500. |
+
+L'outil web de trading
+uvicorn app.main:app --reload --app-dir C:\Users\marc\source\projet_trading\services\api-core
 
 ---
 
