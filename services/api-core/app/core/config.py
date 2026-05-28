@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     outbox_dispatch_batch_size: int = 100
     outbox_dispatch_on_startup: bool = True
     outbox_dispatch_after_write: bool = True
+    outbox_fail_open: bool = True
 
 
 @lru_cache

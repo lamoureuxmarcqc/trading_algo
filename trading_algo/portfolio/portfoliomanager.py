@@ -11,6 +11,13 @@ from datetime import datetime, timedelta
 from .portfolio import Portfolio, Order, Position
 from trading_algo.risk.risk_manager import RiskManager
 
+# Import des routines d'optimisation (wrapper dans strategy)
+from trading_algo.strategy.portfolio_optimizer import (
+    optimize_portfolio as _optimize_portfolio,
+    backtest_strategy as _backtest_strategy,
+    build_portfolio_metadata as _build_portfolio_metadata
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,6 +105,9 @@ class PortfolioManager:
         self._market_data_cache: Dict[str, pd.DataFrame] = {}
         self._cache_timestamp: Dict[str, datetime] = {}
         self._cache_ttl = timedelta(hours=6)
+
+        # Stocke le dernier résultat d'optimisation (poids, backtest, meta)
+        self._last_optimization: Optional[Dict[str, Any]] = None
 
         logger.info(f"PortfolioManager opérationnel sur : {self.base_dir}")
 
@@ -303,7 +313,141 @@ class PortfolioManager:
         return {"score": score, "regime": regime, "action": "EXPAND" if regime == "BULL" else "DEFEND"}
 
     # =========================================================
-    # 5. MONTE CARLO
+    # 5. OPTIMISATION DE PORTEFEUILLE (intégration portfolio_optimizer)
+    # =========================================================
+    def optimize_current_portfolio(
+        self,
+        include_bonds: Optional[bool] = None,
+        bond_ticker: Optional[str] = None,
+        history_period: str = "5y",
+        rebalance_freq: str = "ME",
+        transaction_cost: float = 0.001
+    ) -> Dict[str, Any]:
+        """
+        Lance l'optimisation (max Sharpe) sur le portefeuille courant en utilisant
+        les routines définies dans `strategy.portfolio_optimizer`.
+        Retourne dict avec poids optimaux, métadonnées et résultats de backtest.
+        Non bloquant — en cas d'erreur on retourne 'error' dans le dict.
+        """
+        if not self.current_portfolio:
+            logger.error("Aucun portefeuille chargé pour optimisation")
+            return {"error": "no_portfolio_loaded"}
+
+        tickers = list(self.current_portfolio.positions.keys())
+        if not tickers:
+            logger.error("Portefeuille vide")
+            return {"error": "empty_portfolio"}
+
+        # Récupération des historiques et construction d'un DataFrame de prix alignés
+        price_map = {}
+        for t in tickers:
+            try:
+                df = self._get_historical_data(t, period=history_period)
+                if df is None or df.empty or 'Close' not in df.columns:
+                    logger.warning(f"Historique insuffisant pour {t}")
+                    continue
+                price_map[t] = df['Close'].rename(t)
+            except Exception as e:
+                logger.debug(f"Erreur historique {t}: {e}")
+
+        if not price_map:
+            return {"error": "no_price_data"}
+
+        prices = pd.concat(price_map.values(), axis=1, join='inner').dropna()
+        if prices.empty:
+            return {"error": "aligned_prices_empty"}
+
+        # Rendements annualisés
+        returns = prices.pct_change().dropna()
+        mean_returns = returns.mean() * 252
+        cov_matrix = returns.cov() * 252
+
+        # Métadonnées via fonction utilitaire existante (secteur, pays...)
+        try:
+            meta = _build_portfolio_metadata(tickers)
+        except Exception as e:
+            logger.debug("Impossible de construire les meta via build_portfolio_metadata: %s", e)
+            meta = pd.DataFrame(index=tickers)
+
+        # Décider inclusion obligations si paramètre non fourni
+        if include_bonds is None:
+            include_bonds = any(t for t in tickers if t.upper().startswith('AGG') or t.upper().endswith(('BND', 'TLT', 'XBB.TO')))
+
+        try:
+            weights = _optimize_portfolio(mean_returns, cov_matrix, meta, tickers, include_bonds, bond_ticker)
+            optimal_series = pd.Series(weights, index=tickers)
+        except Exception as e:
+            logger.exception("Erreur lors de l'optimisation: %s", e)
+            return {"error": f"optimization_failed: {e}"}
+
+        # Backtest simple du portefeuille optimisé
+        try:
+            port_value = _backtest_strategy(returns, optimal_series, rebalance_freq, transaction_cost)
+            # port_value is a Series (index dates)
+            total_return = port_value.iloc[-1] - 1
+            annualized_return = (1 + total_return) ** (252 / len(port_value)) - 1 if len(port_value) else np.nan
+            daily_vol = port_value.pct_change().std() * np.sqrt(252) if len(port_value) else np.nan
+            sharpe = (annualized_return - 0.02) / daily_vol if daily_vol and daily_vol != 0 else np.nan
+            max_drawdown = (port_value / port_value.cummax() - 1).min() if len(port_value) else np.nan
+            backtest_metrics = {
+                "total_return": float(total_return),
+                "annualized_return": float(annualized_return),
+                "annualized_vol": float(daily_vol),
+                "sharpe": float(sharpe) if not np.isnan(sharpe) else None,
+                "max_drawdown": float(max_drawdown)
+            }
+        except Exception as e:
+            logger.exception("Erreur lors du backtest: %s", e)
+            port_value = None
+            backtest_metrics = {"error": str(e)}
+
+        result = {
+            "tickers": tickers,
+            "optimal_weights": optimal_series.to_dict(),
+            "optimal_series": optimal_series,
+            "backtest": {
+                "metrics": backtest_metrics,
+                "series": port_value
+            },
+            "meta": meta.to_dict() if isinstance(meta, pd.DataFrame) else meta
+        }
+
+        # Stocker dernier résultat d'optimisation dans l'objet manager pour réutilisation
+        self._last_optimization = result
+        return result
+
+    def apply_optimized_allocation(self, threshold: float = 0.02) -> Dict[str, Any]:
+        """
+        Génère des ordres pour rapprocher le portefeuille des poids optimaux
+        calculés par `optimize_current_portfolio`.
+        threshold : poids minimum de différence pour émettre un ordre.
+        Ne passe pas d'ordres réels — retourne la liste d'ordres à exécuter.
+        """
+        opt = getattr(self, "_last_optimization", None)
+        if not opt:
+            return {"error": "no_optimization_available"}
+        optimal = opt.get("optimal_weights", {})
+        prices = self.get_market_prices(list(self.current_portfolio.positions.keys()))
+        current_alloc = self.current_portfolio.get_allocation(prices)
+        orders = []
+        total_value = sum(self.current_portfolio.positions[t].current_value(prices.get(t, 0)) for t in self.current_portfolio.positions)
+        for t, target_w in optimal.items():
+            cur_w = current_alloc.get(t, 0.0)
+            diff = target_w - cur_w
+            if abs(diff) >= threshold:
+                action = "BUY" if diff > 0 else "SELL"
+                orders.append({
+                    "ticker": t,
+                    "action": action,
+                    "target_weight": target_w,
+                    "current_weight": cur_w,
+                    "delta_weight": diff,
+                    "notional": float(diff * total_value)
+                })
+        return {"orders": orders, "total_value": float(total_value)}
+
+    # =========================================================
+    # 6. MONTE CARLO (déjà existante)
     # =========================================================
     def run_monte_carlo_simulation(self, n_simulations: int = 500, timeframe: int = 252) -> Dict[str, Any]:
         """
@@ -314,7 +458,6 @@ class PortfolioManager:
         - Simulation Monte Carlo avancée (bootstrap + vol stochastique)
         - Calcul des métriques
         """
-
         from trading_algo.analytics.simulation import run_monte_carlo, calculate_simulation_metrics
         import numpy as np
         import pandas as pd
@@ -397,88 +540,181 @@ class PortfolioManager:
             "timeframe": timeframe,
             "tickers": list(df_returns.columns)
         }
-
+    def run_full_analysis(self, fundamentals_map: Dict) -> Dict:
+         scores = self.intelligence.compute_scores(fundamentals_map)
+         target_alloc = self.intelligence.build_allocation(scores)
+         recommendations = self.intelligence.generate_recommendations(target_alloc)
+         prices = self.get_market_prices(list(self.current_portfolio.positions.keys()))
+         current_alloc = self.current_portfolio.get_allocation(prices)
+         portfolio_score = self.intelligence.portfolio_score(scores, current_alloc)
+         return {
+             "scores": scores,
+             "target_allocation": target_alloc,
+             "current_allocation": current_alloc,
+             "recommendations": recommendations,
+             "portfolio_score": portfolio_score
+         }
 
     def analyze_portfolio(self, include_risk: bool = True) -> Dict[str, Any]:
+        """
+        Return a JSON-serializable analysis summary used by the dashboard.
+        Converts pandas/numpy/timestamp types to native Python types to avoid
+        Dash serialization errors.
+        """
         if not self.current_portfolio:
-            return {'error': 'Aucun portefeuille actif'}
-        tickers = list(self.current_portfolio.positions.keys())
-        market_prices = self.get_market_prices(tickers)
-        prices_for_calc = {
-            t: (market_prices.get(t) or pos.average_price)
-            for t, pos in self.current_portfolio.positions.items()
-        }
-        performance = self.current_portfolio.calculate_performance(prices_for_calc)
-        allocation = self.current_portfolio.get_allocation(prices_for_calc)
-        risk_metrics = {}
-        if include_risk:
-            risk_metrics = self._calculate_advanced_risk(tickers, prices_for_calc)
-        else:
-            risk_metrics = self._quick_risk_estimate(tickers, prices_for_calc)
-        return {
-            'performance': performance,
-            'allocation': allocation,
-            'risk_metrics': risk_metrics,
-            'market_prices': prices_for_calc,
-            'timestamp': pd.Timestamp.now().isoformat()
-        }
+            logger.debug("analyze_portfolio: no portfolio loaded")
+            return {}
 
-    def _quick_risk_estimate(self, tickers: List[str], prices: Dict[str, float]) -> Dict:
         try:
-            returns_map = {}
-            for t in tickers:
-                df = self._get_historical_data(t, period="1y")
-                if df is not None and not df.empty and 'Close' in df.columns:
-                    returns_map[t] = df['Close'].pct_change().dropna()
-            if not returns_map:
-                return {'volatility': 0.0, 'sharpe_ratio': 0.0, 'value_at_risk': 0.0}
-            df_returns = pd.DataFrame(returns_map).fillna(0)
-            total_val = sum(
-                self.current_portfolio.positions[t].current_value(prices.get(t, 0))
-                for t in df_returns.columns if t in self.current_portfolio.positions
-            )
-            if total_val <= 0:
-                return {'volatility': 0.0, 'sharpe_ratio': 0.0, 'value_at_risk': 0.0}
-            weights = np.array([
-                self.current_portfolio.positions[t].current_value(prices.get(t, 0)) / total_val
-                for t in df_returns.columns
-            ])
-            portfolio_returns = df_returns.dot(weights)
-            vol = float(portfolio_returns.std() * np.sqrt(252))
-            sharpe = float(self.risk_manager.calculate_sharpe_ratio(portfolio_returns))
-            var = float(self.risk_manager.calculate_value_at_risk(portfolio_returns, 0.95))
-            return {'volatility': vol, 'sharpe_ratio': sharpe, 'value_at_risk': var}
+            tickers = list(self.current_portfolio.positions.keys())
+            market_prices = self.get_market_prices(tickers)
+
+            # Performance from Portfolio (may contain numpy types)
+            performance = self.current_portfolio.calculate_performance(market_prices)
+
+            # Best-effort update history (non-fatal)
+            try:
+                self.current_portfolio.update_history(market_prices)
+            except Exception:
+                logger.debug("update_history failed during analyze_portfolio", exc_info=True)
+
+            # Risk metrics (may include pandas Series / Timestamp keys)
+            risk_metrics = {}
+            if include_risk and tickers:
+                try:
+                    risk_metrics = self._calculate_advanced_risk(tickers, market_prices) or {}
+                except Exception as e:
+                    logger.debug(f"analyze_portfolio: risk calc failed: {e}", exc_info=True)
+                    risk_metrics = {}
+
+            # -----------------------
+            # SANITIZE FOR JSON
+            # -----------------------
+            def _to_py(x):
+                # convert numpy scalars, pandas types to native python types
+                if isinstance(x, (np.generic,)):
+                    return x.item()
+                if isinstance(x, (pd.Timestamp, pd.DatetimeIndex)):
+                    return str(x)
+                return x
+
+            # sanitize performance numbers and positions
+            perf_clean = {}
+            for k, v in (performance or {}).items():
+                if k == "positions" and isinstance(v, dict):
+                    pos_clean = {}
+                    for t, p in v.items():
+                        if isinstance(p, dict):
+                            p_clean = {}
+                            for pk, pv in p.items():
+                                if isinstance(pv, (np.generic, pd.Timestamp)):
+                                    p_clean[pk] = _to_py(pv)
+                                else:
+                                    try:
+                                        # cast numeric-like to float/int, leave others
+                                        if isinstance(pv, (int, float)):
+                                            p_clean[pk] = float(pv) if isinstance(pv, float) else int(pv)
+                                        else:
+                                            p_clean[pk] = pv
+                                    except Exception:
+                                        p_clean[pk] = pv
+                            pos_clean[t] = p_clean
+                        else:
+                            pos_clean[t] = p
+                    perf_clean["positions"] = pos_clean
+                else:
+                    # numeric fields cast to float when possible
+                    if isinstance(v, (np.generic,)):
+                        perf_clean[k] = _to_py(v)
+                    else:
+                        perf_clean[k] = v
+            # ensure top-level numeric fields are native numbers
+            for fld in ("total_value", "cash", "total_pnl", "total_pnl_pct"):
+                if fld in perf_clean:
+                    try:
+                        perf_clean[fld] = float(perf_clean[fld])
+                    except Exception:
+                        pass
+
+            # sanitize market_prices values
+            prices_clean = {}
+            for t, val in (market_prices or {}).items():
+                try:
+                    prices_clean[t] = float(val) if val is not None else None
+                except Exception:
+                    prices_clean[t] = val
+
+            # sanitize risk_metrics: especially returns_series keys (Timestamp) -> str
+            if risk_metrics:
+                rm = dict(risk_metrics)  # shallow copy
+                rs = rm.get("returns_series")
+                if rs is not None:
+                    try:
+                        # Convert to pandas.Series then map to iso strings and floats
+                        s = pd.Series(rs)
+                        s = s.dropna().astype(float)
+                        rm["returns_series"] = {str(idx): float(v) for idx, v in s.items()}
+                    except Exception:
+                        # Fallback: try iterating dict
+                        try:
+                            new_rs = {}
+                            for k, v in dict(rs).items():
+                                new_rs[str(k)] = float(v) if v is not None else None
+                            rm["returns_series"] = new_rs
+                        except Exception:
+                            rm["returns_series"] = {}
+                # ensure numeric metrics are native types
+                for k, v in rm.items():
+                    if k != "returns_series":
+                        if isinstance(v, (np.generic,)):
+                            rm[k] = _to_py(v)
+                risk_metrics = rm
+            # --- existing code above ---
+            # sanitize risk_metrics ... (existing)
+            # -----------------------
+            # CORRELATION MATRIX (daily returns, aligned)
+            # -----------------------
+            corr_dict = {}
+            try:
+                # build returns map
+                returns_map = {}
+                with ThreadPoolExecutor(max_workers=6) as executor:
+                    futures = {executor.submit(self._get_historical_data, t, "3y"): t for t in tickers}
+                    for fut in futures:
+                        t = futures[fut]
+                        df = fut.result()
+                        if df is None or df.empty or "Close" not in df.columns:
+                            continue
+                        ser = df["Close"].pct_change().dropna()
+                        if not ser.empty:
+                            returns_map[t] = ser
+
+                if returns_map:
+                    df_returns = pd.DataFrame(returns_map).dropna(how="all").ffill().dropna()
+                    if not df_returns.empty:
+                        corr = df_returns.corr().fillna(0)
+                        # convert to plain python float dict
+                        corr_dict = {str(r): {str(c): float(corr.at[r, c]) for c in corr.columns} for r in corr.index}
+            except Exception:
+                logger.debug("Failed to compute correlation matrix", exc_info=True)
+
+            return {
+                "performance": perf_clean,
+                "risk_metrics": risk_metrics,
+                "market_prices": prices_clean,
+                "correlation_matrix": corr_dict
+            }
+
         except Exception as e:
-            logger.debug(f"Quick risk estimate failed: {e}")
-            return {'volatility': 0.0, 'sharpe_ratio': 0.0, 'value_at_risk': 0.0}
-
-    # =========================================================
-    # 6. MÉTHODES SUPPLÉMENTAIRES
-    # =========================================================
-    def compute_correlation_matrix(self, tickers: List[str]) -> pd.DataFrame:
-        returns = {}
-        for t in tickers:
-            df = self._get_historical_data(t, "1y")
-            if df is not None:
-                returns[t] = df["Close"].pct_change()
-        df_returns = pd.DataFrame(returns).dropna()
-        return df_returns.corr()
-
-    def generate_rebalance_orders(self, target_alloc: Dict[str, float]) -> List[Dict]:
-        orders = []
-        prices = self.get_market_prices(list(target_alloc.keys()))
-        total_value = sum(
-            pos.current_value(prices.get(t, 0))
-            for t, pos in self.current_portfolio.positions.items()
-        )
-        for ticker, target_weight in target_alloc.items():
-            current_value = self.current_portfolio.positions.get(ticker, Position()).current_value(prices.get(ticker, 0))
-            current_weight = current_value / total_value if total_value else 0
-            diff = target_weight - current_weight
-            if abs(diff) > 0.02:
-                orders.append({
-                    "ticker": ticker,
-                    "action": "BUY" if diff > 0 else "SELL",
-                    "delta_weight": round(diff, 4)
-                })
-        return orders
+            logger.exception("analyze_portfolio failed: %s", e)
+            return {
+                "performance": {
+                    "total_value": 0.0,
+                    "cash": getattr(self.current_portfolio, "cash", 0.0),
+                    "total_pnl": 0.0,
+                    "total_pnl_pct": 0.0,
+                    "positions": {}
+                },
+                "risk_metrics": {},
+                "market_prices": {}
+            }

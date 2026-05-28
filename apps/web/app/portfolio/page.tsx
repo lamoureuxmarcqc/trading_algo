@@ -2,7 +2,7 @@ import { PageShell } from "@/components/page-shell";
 import { formatCurrency, formatPercent, getPortfolioData } from "@/lib/api";
 
 export default async function PortfolioPage() {
-  const { portfolio, performance, source } = await getPortfolioData();
+  const { portfolio, performance, barbell, source } = await getPortfolioData();
   const livePnl = portfolio.positions.reduce((sum, position) => sum + position.unrealized_pnl, 0);
 
   return (
@@ -86,6 +86,61 @@ export default async function PortfolioPage() {
                     </td>
                     <td className="px-4 py-3 text-gain">
                       {formatCurrency(position.unrealized_pnl, portfolio.base_currency)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="panel p-6">
+          <p className="metric-label">Barbell Allocation</p>
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            <div>
+              <p className="text-sm text-slate-400">Defensive Sleeve</p>
+              <p className="mt-2 font-mono text-2xl text-white">{formatPercent(barbell.defensive_weight)}</p>
+            </div>
+            <div>
+              <p className="text-sm text-slate-400">Opportunistic Sleeve</p>
+              <p className="mt-2 font-mono text-2xl text-white">{formatPercent(barbell.opportunistic_weight)}</p>
+            </div>
+            <div>
+              <p className="text-sm text-slate-400">Cash Buffer</p>
+              <p className="mt-2 font-mono text-2xl text-white">{formatPercent(barbell.cash_buffer_weight)}</p>
+            </div>
+          </div>
+          <div className="mt-6 rounded-2xl border border-line bg-black/10 p-4">
+            <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Regime</p>
+            <p className="mt-2 font-mono text-lg text-white">{barbell.regime}</p>
+            <p className="mt-3 text-sm leading-6 text-slate-300">{barbell.rationale}</p>
+          </div>
+        </div>
+
+        <div className="panel p-6">
+          <p className="metric-label">Barbell Rebalance</p>
+          <div className="mt-6 overflow-hidden rounded-2xl border border-line">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-black/20 text-slate-400">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Symbol</th>
+                  <th className="px-4 py-3 font-medium">Bucket</th>
+                  <th className="px-4 py-3 font-medium">Current</th>
+                  <th className="px-4 py-3 font-medium">Target</th>
+                  <th className="px-4 py-3 font-medium">Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {barbell.allocations.map((allocation) => (
+                  <tr key={allocation.symbol} className="border-t border-line/70 align-top">
+                    <td className="px-4 py-3 font-mono text-white">{allocation.symbol}</td>
+                    <td className="px-4 py-3 text-slate-300">{allocation.bucket}</td>
+                    <td className="px-4 py-3 text-slate-300">{formatPercent(allocation.current_weight, 2)}</td>
+                    <td className="px-4 py-3 text-white">{formatPercent(allocation.target_weight, 2)}</td>
+                    <td className={allocation.delta_weight >= 0 ? "px-4 py-3 text-gain" : "px-4 py-3 text-loss"}>
+                      {formatPercent(allocation.delta_weight, 2)}
                     </td>
                   </tr>
                 ))}

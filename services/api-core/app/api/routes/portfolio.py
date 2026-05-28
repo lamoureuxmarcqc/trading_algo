@@ -4,6 +4,8 @@ from app.api.deps import get_platform_service
 from app.core.config import settings
 from app.events.dispatcher import outbox_dispatcher
 from app.schemas.portfolio import (
+    BarbellAllocationResponse,
+    BarbellStrategyConfig,
     PortfolioHistoryPoint,
     PortfolioOverview,
     PortfolioPerformance,
@@ -40,6 +42,21 @@ def get_history(
     platform_service: PlatformService = Depends(get_platform_service),
 ) -> list[PortfolioHistoryPoint]:
     return platform_service.get_portfolio_history(limit=limit)
+
+
+@router.get("/barbell", response_model=BarbellAllocationResponse)
+def get_barbell_allocation(
+    platform_service: PlatformService = Depends(get_platform_service),
+) -> BarbellAllocationResponse:
+    return platform_service.get_barbell_allocation()
+
+
+@router.post("/barbell", response_model=BarbellAllocationResponse)
+def build_barbell_allocation(
+    payload: BarbellStrategyConfig,
+    platform_service: PlatformService = Depends(get_platform_service),
+) -> BarbellAllocationResponse:
+    return platform_service.get_barbell_allocation(payload)
 
 
 @router.post("/rebalance", response_model=RebalanceResponse)

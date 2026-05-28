@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import get_platform_service
-from app.schemas.risk import PortfolioRiskSnapshot, PositionRisk, ScenarioResult
+from app.schemas.risk import CorrelationMatrixResponse, PortfolioRiskSnapshot, PositionRisk, ScenarioResult
 from app.services.platform_service import PlatformService
 
 router = APIRouter()
@@ -19,6 +19,20 @@ def get_position_risk(
     platform_service: PlatformService = Depends(get_platform_service),
 ) -> list[PositionRisk]:
     return platform_service.get_position_risk()
+
+
+@router.get("/scenarios", response_model=list[ScenarioResult])
+def list_scenarios(
+    platform_service: PlatformService = Depends(get_platform_service),
+) -> list[ScenarioResult]:
+    return platform_service.list_scenarios()
+
+
+@router.get("/correlations", response_model=CorrelationMatrixResponse)
+def get_correlations(
+    platform_service: PlatformService = Depends(get_platform_service),
+) -> CorrelationMatrixResponse:
+    return platform_service.get_portfolio_correlation_matrix()
 
 
 @router.get("/scenario/{scenario_id}", response_model=ScenarioResult)

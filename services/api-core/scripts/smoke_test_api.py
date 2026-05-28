@@ -9,21 +9,30 @@ BASE_URL = "http://127.0.0.1:8000/api/v1"
 
 def fetch(path: str) -> tuple[int, str]:
     method = "POST" if path == "/portfolio/refresh" else "GET"
-    with request.urlopen(request.Request(f"{BASE_URL}{path}", method=method)) as response:
+    req = request.Request(
+        f"{BASE_URL}{path}",
+        method=method,
+        headers={"X-Tenant-ID": "family-office-demo"},
+    )
+    with request.urlopen(req) as response:
         return response.status, response.read().decode("utf-8")
 
 
 def main() -> None:
     endpoints = [
         "/health",
+        "/terminal/snapshot",
         "/portfolio/refresh",
         "/portfolio",
         "/portfolio/performance",
         "/portfolio/history",
+        "/portfolio/barbell",
         "/orders",
         "/orders/fills",
         "/risk/portfolio",
         "/risk/positions",
+        "/risk/scenarios",
+        "/risk/correlations",
         "/regime",
         "/signals/AAPL",
         "/forecast/AAPL",
@@ -32,6 +41,8 @@ def main() -> None:
         "/research/sectors",
         "/admin/users",
         "/admin/audit",
+        "/admin/events",
+        "/admin/events/summary",
     ]
 
     for path in endpoints:

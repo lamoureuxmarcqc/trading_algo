@@ -26,6 +26,32 @@ RSI_OVERBOUGHT = getattr(settings, "RSI_OVERBOUGHT", 70)
 RSI_OVERSOLD = getattr(settings, "RSI_OVERSOLD", 30)
 
 
+# Module UI pour dashboard professionnel d'évaluation d'actions.
+# Contient uniquement la couche de visualisation.
+# Toute la logique métier doit être assurée par un module externe (ex: stock_manager).
+
+import os
+import json
+import logging
+import numpy as np
+from datetime import datetime
+from typing import Dict, Any, Optional, List
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+from trading_algo import settings
+
+logger = logging.getLogger(__name__)
+
+# Constantes d'affichage (seuils pour interprétation visuelle)
+SMA_PERIODS = getattr(settings, "SMA_PERIODS", [20, 50, 200])
+RSI_OVERBOUGHT = getattr(settings, "RSI_OVERBOUGHT", 70)
+RSI_OVERSOLD = getattr(settings, "RSI_OVERSOLD", 30)
+
+
 class AdvancedTradingDashboard:
     """
     Dashboard principal pour l'analyse d'une action unique.
@@ -50,6 +76,10 @@ class AdvancedTradingDashboard:
         self.score: float = 5.0
         self.recommendation: str = "NEUTRE"
         self.current_price: float = 0.0
+
+        # Scores supplémentaires (peuvent être injectés depuis StockPredictor)
+        self.undervaluation_score: Optional[float] = None
+        self.opportunity_score: Optional[float] = None
 
     def load_data(self,
                   technical_data: Optional[pd.DataFrame] = None,
@@ -85,7 +115,26 @@ class AdvancedTradingDashboard:
         self.market_sentiment = market_sentiment or {}
         self.training_metrics = training_metrics
         self.prediction_examples = prediction_examples or []
-        self.monte_carlo_sims = monte_carlo_sims 
+        # Normalise monte_carlo_sims en numpy array si fourni (supporte list/ndarray/DataFrame)
+        try:
+            if monte_carlo_sims is None:
+                self.monte_carlo_sims = None
+            else:
+                arr = np.asarray(monte_carlo_sims)
+                # empty arrays treated as None
+                if arr.size == 0:
+                    self.monte_carlo_sims = None
+                else:
+                    # Compatibility: some Monte Carlo generators return shape (timeframe, n_simulations)
+                    # while the plotting expects (n_simulations, n_steps). If rows > cols, assume transpose is needed.
+                    if arr.ndim == 2 and arr.shape[0] > arr.shape[1]:
+                        try:
+                            arr = arr.T
+                        except Exception:
+                            pass
+                    self.monte_carlo_sims = arr
+        except Exception:
+            self.monte_carlo_sims = None
 
         if self.technical_data is not None and not self.technical_data.empty:
             try:
@@ -98,12 +147,21 @@ class AdvancedTradingDashboard:
         if recommendation is not None:
             self.recommendation = recommendation
 
+        # propagate opportunity/undervaluation if present in overview dict
+        try:
+            if isinstance(self.overview, dict):
+                if 'undervaluation_score' in self.overview:
+                    self.undervaluation_score = float(self.overview.get('undervaluation_score'))
+                if 'opportunity_score' in self.overview:
+                    self.opportunity_score = float(self.overview.get('opportunity_score'))
+        except Exception:
+            pass
+
         self.logger.info(f"Données chargées pour {self.symbol}")
 
     # --------------------------------------------------------------------------
     # Méthodes de construction des graphiques (UI pure)
     # --------------------------------------------------------------------------
-
 
     def _add_monte_carlo_chart(self, fig: go.Figure, row: int, col: int) -> None:
         """
@@ -415,7 +473,7 @@ class AdvancedTradingDashboard:
         df_pred = self.predictions_df
         fig.add_trace(
             go.Scattergl(x=df_pred.index, y=df_pred['Predicted_Close'], mode='lines+markers',
-                         name='Prévisions IA', line=dict(color='red', dash='dash')),
+                         name='Maximum action down', line=dict(color='red', dash='dash')),
             row=row, col=col
         )
         if 'CI_Lower' in df_pred.columns and 'CI_Upper' in df_pred.columns:
@@ -504,6 +562,58 @@ class AdvancedTradingDashboard:
         )
         legend_entries = list(zip(colors, labels))
         self._add_gauge_legend_annotation(fig, x_paper=0.88, y_paper=0.34, entries=legend_entries, title="VaR (95%)")
+
+    def _add_opportunity_gauge(self, fig: go.Figure, row: int, col: int) -> None:
+        """
+        Jauge dédiée pour l'Opportunity Score (combinaison heuristique d'undervaluation + score trading).
+        Valeur sur 0-100. Affiche des bandes colorées pour interprétation rapide.
+        """
+        # Prefer explicit attribute, fallback to overview payload or undervaluation score
+        value = None
+        try:
+            value = getattr(self, 'opportunity_score', None)
+            if value is None and isinstance(self.overview, dict):
+                value = self.overview.get('opportunity_score') or self.overview.get('undervaluation_score')
+            if value is None:
+                # also try undervaluation as fallback
+                value = getattr(self, 'undervaluation_score', None)
+        except Exception:
+            value = None
+
+        if value is None:
+            return
+
+        try:
+            value = float(value)
+        except Exception:
+            return
+
+        # Clamp
+        value = max(0.0, min(100.0, value))
+
+        bands = [(0, 30), (30, 60), (60, 80), (80, 100)]
+        colors = ["#d9534f", "#f0ad4e", "#5cb85c", "#2b7a2b"]
+        labels = ["Faible", "Modéré", "Bon", "Excellent"]
+
+        fig.add_trace(
+            go.Indicator(
+                mode="gauge+number",
+                value=value,
+                title={'text': "Opportunity Score", 'font': {'size': 14}},
+                number={'suffix': ' /100', 'valueformat': '.1f'},
+                gauge={
+                    'axis': {'range': [0, 100], 'tickwidth': 1},
+                    'bar': {'color': "darkblue"},
+                    'steps': [{'range': [b[0], b[1]], 'color': c} for b, c in zip(bands, colors)],
+                    'threshold': {'line': {'color': "black", 'width': 3}, 'thickness': 0.75, 'value': value}
+                }
+            ),
+            row=row, col=col
+        )
+
+        # Add legend annotation for readability
+        legend_entries = list(zip(colors, labels))
+        self._add_gauge_legend_annotation(fig, x_paper=0.72, y_paper=0.40, entries=legend_entries, title="Opportunity")
 
     def _format_color_square(self, color: str, size: int = 12) -> str:
         """Renvoie un carré coloré HTML pour les légendes."""
@@ -637,6 +747,25 @@ class AdvancedTradingDashboard:
         self._add_prediction_examples(all_rows)
         self._add_economic_summary(all_rows)
         self._add_risk_legend_rows(all_rows)
+
+        # Opportunity/Undervaluation display: prefer opportunity_score (combination with trading_score)
+        opp_score = getattr(self, 'opportunity_score', None)
+        underval_score = getattr(self, 'undervaluation_score', None)
+        if opp_score is None and isinstance(self.overview, dict):
+            opp_score = self.overview.get('opportunity_score') or self.overview.get('undervaluation_score')
+            underval_score = self.overview.get('undervaluation_score', underval_score)
+
+        if opp_score is not None:
+            try:
+                all_rows.append(["Opportunity Score", f"{float(opp_score):.1f}/100", "Combinaison heuristique: undervaluation + score trading"])
+            except Exception:
+                all_rows.append(["Opportunity Score", str(opp_score), "Combinaison heuristique: undervaluation + score trading"])
+        elif underval_score is not None:
+            try:
+                all_rows.append(["Undervaluation Score", f"{float(underval_score):.1f}/100", "Score heuristique de sous-évaluation (0-100)"])
+            except Exception:
+                all_rows.append(["Undervaluation Score", str(underval_score), "Score heuristique de sous-évaluation (0-100)"])
+
         all_rows.append(["Score trading", f"{self.score}/10", self.recommendation])
 
         headers = ["Indicateur", "Valeur", "Interprétation"]
@@ -686,8 +815,8 @@ class AdvancedTradingDashboard:
                     'Volume',
                     'Moyennes Mobiles',
                     'Volatilité (ATR)',
-                    'Monte‑Carlo (historique + simulations)',
-                    'Prévisions IA',
+                'Monte‑Carlo (historique + simulations)',
+                    'Maximum action down',
                     'Drawdown Historique',
                     'Sharpe Ratio',
                     'VaR (95%)'
@@ -699,7 +828,13 @@ class AdvancedTradingDashboard:
             # Ajout de tous les sous-graphiques
             self._add_main_price_chart(fig, row=1, col=1)
             self._add_trading_score_gauge(fig, row=1, col=3)
-            self._add_market_sentiment_indicator(fig, row=2, col=3)
+
+            # Remplaced market sentiment indicator by dedicated Opportunity gauge.
+            # Opportunity gauge is a dedicated visual combining undervaluation + trading_score.
+            self._add_opportunity_gauge(fig, row=2, col=3)
+
+            # Keep market sentiment accessible via overview / summary cards;
+            # if desired, could also render sentiment elsewhere (not to overcrowd).
             self._add_rsi_chart(fig, row=3, col=1)
             self._add_macd_chart(fig, row=3, col=2)
             self._add_volume_chart(fig, row=3, col=3)
@@ -771,6 +906,99 @@ class AdvancedTradingDashboard:
             ('Dividende', self.overview.get('dividend_yield', 'N/A')),
         ]
         return pd.DataFrame([{'Métrique': k, 'Valeur': v} for k, v in items])
+
+
+class MiniDashboard:
+    """Dashboard minimal pour un affichage rapide (prix + prévisions)."""
+
+    def __init__(self, symbol: str):
+        self.symbol = symbol.upper()
+        self.logger = logging.getLogger(__name__)
+
+    def create_compact_view(self, data: pd.DataFrame, predictions_df: pd.DataFrame) -> go.Figure:
+        """Crée une vue compacte avec le prix historique et les prévisions."""
+        fig = go.Figure()
+        if data is not None and not data.empty and 'Close' in data.columns:
+            fig.add_trace(
+                go.Scattergl(x=data.index, y=data['Close'], mode='lines', name='Prix historique',
+                             line=dict(color='blue', width=2))
+            )
+        if predictions_df is not None and not predictions_df.empty and 'Predicted_Close' in predictions_df.columns:
+            fig.add_trace(
+                go.Scattergl(x=predictions_df.index, y=predictions_df['Predicted_Close'], mode='lines+markers',
+                             name='Maximum action down', line=dict(color='red', width=2, dash='dash'), marker=dict(size=4))
+            )
+        fig.update_layout(
+            title=f'{self.symbol} - Vue Rapide',
+            xaxis_title='Date',
+            yaxis_title='Prix ($)',
+            template='plotly_white',
+            height=400,
+            hovermode='x unified'
+        )
+        return fig
+
+
+# --------------------------------------------------------------------------
+# Dashboard de comparaison multi-actions
+# --------------------------------------------------------------------------
+def create_comparison_dashboard(symbols: List[str], data_dict: Dict[str, pd.DataFrame]) -> go.Figure:
+    """
+    Crée un dashboard de comparaison entre plusieurs actions.
+    data_dict : dictionnaire {symbole: DataFrame contenant au moins Close, ATR, RSI, Volume}
+    """
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=('Performance Relative', 'Volatilité Comparée (ATR)', 'RSI Comparé', 'Volume Normalisé'),
+        vertical_spacing=0.1,
+        horizontal_spacing=0.1,
+    )
+
+    colors = px.colors.qualitative.Set3
+    for idx, symbol in enumerate(symbols):
+        df = data_dict.get(symbol)
+        if df is None or df.empty:
+            continue
+        color = colors[idx % len(colors)]
+
+        # Performance relative (normalisée à 100)
+        if 'Close' in df.columns and len(df) > 0:
+            normalized = df['Close'] / df['Close'].iloc[0] * 100
+            fig.add_trace(
+                go.Scattergl(x=df.index, y=normalized, name=symbol, line=dict(color=color)),
+                row=1, col=1
+            )
+
+        # Volatilité (ATR)
+        if 'ATR' in df.columns:
+            fig.add_trace(
+                go.Scattergl(x=df.index, y=df['ATR'], name=symbol, line=dict(color=color), showlegend=False),
+                row=1, col=2
+            )
+
+        # RSI
+        if 'RSI' in df.columns:
+            fig.add_trace(
+                go.Scattergl(x=df.index, y=df['RSI'], name=symbol, line=dict(color=color), showlegend=False),
+                row=2, col=1
+            )
+
+        # Volume normalisé
+        if 'Volume' in df.columns:
+            volume_norm = df['Volume'] / df['Volume'].max() * 100
+            fig.add_trace(
+                go.Bar(x=df.index, y=volume_norm, name=symbol, marker_color=color, opacity=0.6, showlegend=False),
+                row=2, col=2
+            )
+
+    fig.update_layout(
+        title='Comparaison Multi-Actions',
+        height=1000,
+        showlegend=True,
+        template='plotly_white',
+        hovermode='x unified'
+    )
+    return fig
 
 
 class MiniDashboard:

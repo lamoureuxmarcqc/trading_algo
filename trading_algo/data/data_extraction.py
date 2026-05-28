@@ -618,7 +618,156 @@ class FundamentalExtractor:
             },
             'source': 'Yahoo Finance'
         }
+    def compute_undervaluation_score(symbol: str, overview: Optional[Dict[str, Any]] = None, historical: Optional[pd.DataFrame] = None, trading_score: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Heuristique pour estimer une 'sous-évaluation extrême' (score 0-100) et une
+        opportunité combinée avec le score de trading.
 
+        Paramètres:
+          - symbol: ticker (utilisé si overview/historical non fournis)
+          - overview: dict retourné par `get_stock_overview` (optionnel)
+          - historical: DataFrame OHLCV (optionnel)
+          - trading_score: score de trading existant (0-10) — si fourni il sera intégré
+
+        Retour:
+          {
+            'score': float,                     # heuristique pure d'undervaluation (0-100)
+            'opportunity_score': float,         # combinaison trading + undervaluation (0-100)
+            'details': {...}                    # composants détaillés pour debugging/explainability
+          }
+
+        Logique:
+          - pe_score (25 pts) : plus le P/E est bas, plus le score augmente (capé).
+          - forward_pe_score (15 pts)
+          - proximity_score (35 pts) : proximité avec le 52-week low.
+          - drawdown_score (25 pts): amplitude de chute récente.
+          - aggregated undervaluation_score = somme des composants (0-100 capé).
+          - opportunity_score: combinaison pondérée:
+              opportunity = 0.6 * undervaluation_score + 0.4 * (trading_score * 10)
+            (trading_score est 0-10, multiplié par 10 pour échelle 0-100)
+        """
+        # Récupération des données si nécessaire
+        if overview is None:
+            overview = get_stock_overview(symbol) or {}
+
+        if historical is None:
+            try:
+                sde = StockDataExtractor(symbol=symbol)
+                historical = sde.get_historical_data(symbol, period="1y", interval="1d")
+            except Exception:
+                historical = None
+
+        # Tentative de parsing des champs
+        def _to_float(val):
+            try:
+                return float(val)
+            except Exception:
+                return np.nan
+
+        pe = None
+        try:
+            pe_raw = overview.get('pe_ratio')
+            # pe_ratio in overview might be a formatted string like "N/A" or "12.34"
+            pe = _to_float(pe_raw)
+        except Exception:
+            pe = np.nan
+
+        fpe = None
+        try:
+            fpe_raw = overview.get('forward_pe')
+            fpe = _to_float(fpe_raw)
+        except Exception:
+            fpe = np.nan
+
+        current_price = _to_float(overview.get('current_price', np.nan))
+        low52 = _to_float(overview.get('52_week_low', np.nan))
+        high52 = _to_float(overview.get('52_week_high', np.nan))
+
+        details: Dict[str, Any] = {}
+        score_components = []
+
+        # 1) P/E score (max 25)
+        pe_score = 0.0
+        if pe is not None and not np.isnan(pe) and pe > 0:
+            pe_norm = max(0.0, min(1.0, (40.0 - pe) / 40.0))
+            pe_score = pe_norm * 25.0
+        details['pe'] = pe
+        details['pe_score'] = pe_score
+        score_components.append(pe_score)
+
+        # 2) Forward P/E (max 15)
+        fpe_score = 0.0
+        if fpe is not None and not np.isnan(fpe) and fpe > 0:
+            fpe_norm = max(0.0, min(1.0, (30.0 - fpe) / 30.0))
+            fpe_score = fpe_norm * 15.0
+        details['forward_pe'] = fpe
+        details['forward_pe_score'] = fpe_score
+        score_components.append(fpe_score)
+
+        # 3) Proximité 52-week low (max 35)
+        proximity_score = 0.0
+        if not np.isnan(current_price) and not np.isnan(low52) and not np.isnan(high52) and high52 > low52:
+            norm_dist = (current_price - low52) / (high52 - low52)
+            norm_dist = max(0.0, min(1.0, norm_dist))
+            proximity_score = (1.0 - norm_dist) * 35.0
+        details['current_price'] = current_price
+        details['52w_low'] = low52
+        details['52w_high'] = high52
+        details['proximity_score'] = proximity_score
+        score_components.append(proximity_score)
+
+        # 4) Drawdown récent (max 25)
+        drawdown_score = 0.0
+        if historical is not None and not historical.empty and 'Close' in historical.columns:
+            recent = historical['Close'].dropna().tail(60)
+            if len(recent) >= 2:
+                cur = recent.iloc[-1]
+                min_recent = recent.min()
+                if cur > 0:
+                    drop_pct = (cur - min_recent) / cur
+                    drawdown_norm = max(0.0, min(0.8, drop_pct)) / 0.8
+                    drawdown_score = drawdown_norm * 25.0
+        details['drawdown_score'] = drawdown_score
+        score_components.append(drawdown_score)
+
+        raw_underv_score = sum(score_components)
+        undervaluation_score = float(max(0.0, min(100.0, raw_underv_score)))
+
+        # Combine with trading_score if provided
+        t_score = None
+        if trading_score is not None:
+            try:
+                t_score = float(trading_score)
+                t_score = max(0.0, min(10.0, t_score))
+            except Exception:
+                t_score = None
+
+        # weighting: 60% undervaluation, 40% trading_score*10 (scaled)
+        if t_score is not None:
+            opportunity_score = 0.6 * undervaluation_score + 0.4 * (t_score * 10.0)
+        else:
+            # fallback: opportunity == undervaluation
+            opportunity_score = undervaluation_score
+
+        opportunity_score = float(max(0.0, min(100.0, opportunity_score)))
+
+        details['components'] = {
+            'pe_score': pe_score,
+            'forward_pe_score': fpe_score,
+            'proximity_score': proximity_score,
+            'drawdown_score': drawdown_score
+        }
+        details['raw_undervaluation_score'] = float(round(raw_underv_score, 3))
+        details['undervaluation_score'] = float(round(undervaluation_score, 3))
+        details['trading_score_input'] = t_score
+        details['opportunity_score'] = float(round(opportunity_score, 3))
+        details['extreme_undervaluation'] = bool(opportunity_score >= 70.0)
+
+        return {
+            'score': float(round(undervaluation_score, 2)),
+            'opportunity_score': float(round(opportunity_score, 2)),
+            'details': details
+        }
     @staticmethod
     @log_exceptions(default_return={})
     def get_stock_overview(symbol: str) -> Dict[str, Any]:
@@ -641,7 +790,7 @@ class FundamentalExtractor:
             except:
                 return str(val)
 
-        return {
+        overview = {
             'symbol': symbol,
             'name': info.get('longName', info.get('shortName', 'N/A')),
             'sector': info.get('sector', 'N/A'),
@@ -659,8 +808,34 @@ class FundamentalExtractor:
             'avg_volume': info.get('averageVolume', 'N/A'),
             'currency': info.get('currency', 'USD'),
             'exchange': info.get('exchange', 'N/A'),
-            'country': info.get('country', 'N/A')
+            'country': info.get('country', 'N/A'),
+            # raw values useful for downstream heuristics
+            '_raw_marketCap': info.get('marketCap'),
+            '_raw_trailingPE': info.get('trailingPE'),
+            '_raw_forwardPE': info.get('forwardPE'),
+            '_raw_currentPrice': info.get('currentPrice', info.get('regularMarketPrice'))
         }
+
+        # Tenter d'ajouter les scores heuristiques (undervaluation / opportunity).
+        try:
+            # compute_undervaluation_score est défini dans ce module (non-bloquant)
+            result = {}
+            if 'compute_undervaluation_score' in globals():
+                result = compute_undervaluation_score(symbol, overview=overview, historical=None)
+            else:
+                # fallback si la fonction est définie plus bas / ailleurs
+                from trading_algo.data.data_extraction import compute_undervaluation_score as _comp
+                result = _comp(symbol, overview=overview, historical=None)
+
+            overview['undervaluation_score'] = float(result.get('score', 0.0))
+            overview['opportunity_score'] = float(result.get('opportunity_score', result.get('score', 0.0)))
+            overview['undervaluation_details'] = result.get('details', {})
+        except Exception as e:
+            logger.debug(f"Impossible de calculer les scores d'undervaluation/opportunity pour {symbol}: {e}")
+            # laisser les champs absents plutôt que d'interrompre la fonction
+            pass
+
+        return overview
 
 # ============================================================
 # 3. SENTIMENT EXTRACTOR (Twitter/X + NY Times)

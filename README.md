@@ -24,6 +24,10 @@ Cette couche apporte :
 - un cockpit frontend Next.js initial aligné sur les pages CIO / trader / risk / research
 - une base de gouvernance institutionnelle via ADRs, standards API et conventions event-driven
 - un cockpit Next.js désormais branché sur `api-core` avec fallback si l'API n'est pas disponible
+- un terminal web FastAPI agrege via snapshot unique pour limiter le fan-out reseau
+- un domaine risque enrichi avec stress historiques et matrice de corrélation
+- une strategie d'allocation `barbell` exploitable en API et visible dans le cockpit portefeuille
+- un socle Alembic pour versionner la base PostgreSQL
 
 Standards désormais visibles dans le repo :
 
@@ -178,6 +182,29 @@ Le dashboard sera accessible à `http://{WEB_HOST}:{WEB_PORT}`.
 - Messages d'avertissement React (ex: `defaultProps`) provenant de bibliothèques (dash-bootstrap-components) sont généralement sans gravité.
 - Vérifier `assets/` et `assets/custom.css` si le style masque des composants (ex. `display: none` sur `.nav` ou `.tab`).
 - Pour debug côté client : ouvrir DevTools → Network → filtrer `/_dash-layout` et `/_dash-update-component` pour voir les réponses 500 et le message d'erreur Python.
+
+### Alembic / Base de données
+
+Le repo inclut désormais un socle Alembic pour `services/api-core`.
+
+Workflow recommandé :
+
+```bash
+alembic upgrade head
+```
+
+Si la base existait déjà avant l'introduction d'Alembic et qu'elle a déjà été alignée manuellement :
+
+```bash
+alembic stamp head
+```
+
+Puis, pour chaque évolution future :
+
+1. modifier les modèles SQLAlchemy
+2. générer une migration
+3. relire la migration
+4. appliquer avec `alembic upgrade head`
 
 ### Configuration du scheduler
 - Intervalle de rafraîchissement configurable via `MARKET_REFRESH_INTERVAL_MIN` dans `trading_algo.settings`.

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 from starlette.background import BackgroundTasks
@@ -21,7 +22,9 @@ from app.core.config import settings  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.models import Account, AuditLog, EventOutbox, IdempotencyKey, Order, User  # noqa: E402
 from app.events.bus import event_bus  # noqa: E402
+from app.events.contracts import DomainEvent  # noqa: E402
 from app.events.dispatcher import OutboxDispatcher  # noqa: E402
+from app.schemas.portfolio import BarbellStrategyConfig  # noqa: E402
 from app.schemas.trading import OrderCreate, OrderResponse  # noqa: E402
 from app.services.platform_service import (  # noqa: E402
     IdempotencyConflictError,
@@ -227,6 +230,103 @@ def test_domain_event_summary_counts_statuses() -> None:
     assert summary.failed == 1
     assert summary.pending == 0
     assert summary.delivered == 0
+
+
+def test_publish_domain_event_fails_open_when_outbox_schema_is_not_ready(monkeypatch) -> None:
+    session, service = _build_service()
+    event = DomainEvent(
+        event_name="com.terminal.portfolio.refreshed.v1",
+        topic="terminal.portfolio.v1",
+        aggregate_type="portfolio",
+        aggregate_id="family-office-master",
+        payload={"status": "refreshed"},
+    )
+
+    def broken_flush() -> None:
+        raise SQLAlchemyError("missing outbox column")
+
+    original_flush = service.db.flush
+    monkeypatch.setattr(service.db, "flush", broken_flush)
+
+    service._publish_domain_event(event)
+    monkeypatch.setattr(service.db, "flush", original_flush)
+
+    assert len(session.scalars(select(EventOutbox)).all()) == 0
+
+
+def test_list_scenarios_exposes_historical_stress_catalog() -> None:
+    _session, service = _build_service()
+
+    scenarios = service.list_scenarios()
+    scenario_ids = {scenario.scenario_id for scenario in scenarios}
+
+    assert "1929" in scenario_ids
+    assert "1973_oil" in scenario_ids
+    assert "1989" in scenario_ids
+    assert "2000_tech" in scenario_ids
+    assert "2008" in scenario_ids
+    assert "2020_pandemic" in scenario_ids
+    assert "2022_inflation" in scenario_ids
+    assert any(scenario.macro_context for scenario in scenarios)
+
+
+def test_portfolio_correlation_matrix_returns_square_matrix() -> None:
+    _session, service = _build_service()
+
+    matrix = service.get_portfolio_correlation_matrix()
+
+    assert len(matrix.symbols) == len(matrix.matrix)
+    assert all(len(row) == len(matrix.symbols) for row in matrix.matrix)
+    for index, row in enumerate(matrix.matrix):
+        assert row[index] == 1.0
+
+
+def test_barbell_allocation_returns_balanced_targets() -> None:
+    _session, service = _build_service()
+
+    allocation = service.get_barbell_allocation()
+    total_target = sum(item.target_weight for item in allocation.allocations)
+
+    assert allocation.regime in {"risk_on", "neutral", "risk_off", "defensive"}
+    assert pytest.approx(total_target, abs=0.0005) == 1.0
+    assert any(item.bucket == "defensive" for item in allocation.allocations)
+    assert any(item.bucket == "opportunistic" for item in allocation.allocations)
+    assert any(item.symbol == "CASH" for item in allocation.allocations)
+    assert allocation.rebalance_instructions
+
+
+def test_barbell_allocation_accepts_custom_bucket_targets() -> None:
+    _session, service = _build_service()
+
+    allocation = service.get_barbell_allocation(
+        BarbellStrategyConfig(
+            defensive_weight_target=0.50,
+            opportunistic_weight_target=0.30,
+            cash_buffer_target=0.20,
+            max_positions_per_bucket=2,
+        )
+    )
+
+    assert allocation.defensive_weight == pytest.approx(0.5, abs=0.0001)
+    assert allocation.opportunistic_weight == pytest.approx(0.3, abs=0.0001)
+    assert allocation.cash_buffer_weight == pytest.approx(0.2, abs=0.0001)
+    assert len([item for item in allocation.allocations if item.bucket == "defensive"]) <= 2
+    assert len([item for item in allocation.allocations if item.bucket == "opportunistic"]) <= 2
+
+
+def test_terminal_snapshot_aggregates_terminal_sections() -> None:
+    _session, service = _build_service()
+
+    snapshot = service.get_terminal_snapshot()
+
+    assert snapshot.portfolio.portfolio_id == "family-office-master"
+    assert snapshot.signals
+    assert snapshot.forecasts
+    assert snapshot.scenarios
+    assert snapshot.barbell.allocations
+    assert snapshot.event_summary.delivered >= 0
+    assert snapshot.users
+    assert snapshot.audit_logs is not None
 
 
 def test_trading_route_sets_replay_status_headers() -> None:

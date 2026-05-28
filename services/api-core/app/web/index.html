@@ -167,6 +167,47 @@
         </div>
       </section>
 
+      <section class="grid two-up">
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Portfolio Construction</p>
+              <h2>Barbell Allocation</h2>
+            </div>
+            <span id="barbell-regime" class="micro">--</span>
+          </div>
+          <div class="metrics" id="barbell-metrics"></div>
+          <p id="barbell-rationale" class="metric-delta"></p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Bucket</th>
+                  <th>Role</th>
+                  <th>Current</th>
+                  <th>Target</th>
+                  <th>Delta</th>
+                </tr>
+              </thead>
+              <tbody id="barbell-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Event Backbone</p>
+              <h2>Delivery Status</h2>
+            </div>
+            <span id="snapshot-generated-at" class="micro">--</span>
+          </div>
+          <div class="metrics" id="event-summary-metrics"></div>
+          <pre id="event-summary-note" class="result-box">Outbox status not loaded yet.</pre>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="section-head">
           <div>
@@ -187,6 +228,21 @@
               </tr>
             </thead>
             <tbody id="position-risk-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Correlation</p>
+            <h2>Portfolio Correlation Matrix</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead id="correlation-head"></thead>
+            <tbody id="correlation-table"></tbody>
           </table>
         </div>
       </section>

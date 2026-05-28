@@ -14,6 +14,7 @@ from pathlib import Path
 from dash import Dash, html, dcc, Input, Output
 import dash_bootstrap_components as dbc
 from apscheduler.schedulers.background import BackgroundScheduler
+from flask import request, jsonify
 
 # --- CONFIGURATION DES CHEMINS ---
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -23,6 +24,9 @@ from trading_algo.web_dashboard.layouts.symbol_layout import symbol_layout
 from trading_algo.web_dashboard.layouts.market_layout import market_layout
 from trading_algo import settings
 from trading_algo.logging_config import init_logging
+from trading_algo.portfolio.portfoliomanager import PortfolioManager
+from trading_algo.data.data_extraction import StockDataExtractor
+from trading_algo.portfolio.portfolio import Position
 
 # --- MODULES DE GESTION ---
 try:
@@ -136,6 +140,73 @@ app.title = "Trading Algo — Professional Terminal"
 @server.route("/health")
 def _health():
     return "OK", 200
+
+# Endpoint REST pour optimisation de portefeuille
+@server.route("/api/portfolio/optimize", methods=["POST"])
+def api_optimize_portfolio():
+    """
+    POST JSON:
+      {
+        "portfolio_name": "MyPortfolio",            # optionnel
+        "tickers": ["AAPL", "MSFT"],               # optionnel si portfolio_name fourni
+        "bond_ticker": "AGG",
+        "horizon": 5,                              # années
+        "rebalance_freq": "ME",
+        "transaction_cost": 0.001,
+        "capital": 100000
+      }
+    """
+    try:
+        payload = request.get_json(force=True) or {}
+        portfolio_name = payload.get("portfolio_name")
+        tickers = payload.get("tickers", [])
+        bond_ticker = payload.get("bond_ticker")
+        horizon = int(payload.get("horizon", 5))
+        rebalance = payload.get("rebalance_freq", "ME")
+        tx_cost = float(payload.get("transaction_cost", 0.001))
+        capital = float(payload.get("capital", 100000))
+
+        pm = PortfolioManager(StockDataExtractor)
+
+        if portfolio_name:
+            loaded = pm.load_portfolio(portfolio_name)
+            if not loaded:
+                return jsonify({"error": "portfolio_not_found"}), 404
+        elif tickers:
+            # créer un portefeuille temporaire pour l'optimisation
+            tmp_name = f"api_tmp_{int(pd.Timestamp.now().timestamp())}"
+            p = pm.create_portfolio(tmp_name, capital)
+            for t in tickers:
+                p.positions[str(t).upper()] = Position(str(t).upper(), 0.0, 0.0)
+        else:
+            return jsonify({"error": "missing_portfolio_or_tickers"}), 400
+
+        result = pm.optimize_current_portfolio(
+            include_bonds=bool(bond_ticker),
+            bond_ticker=bond_ticker,
+            history_period=f"{horizon}y",
+            rebalance_freq=rebalance,
+            transaction_cost=tx_cost
+        )
+
+        if not result or result.get("error"):
+            return jsonify({"error": result.get("error", "optimization_failed")}), 500
+
+        out = {
+            "optimal_weights": result.get("optimal_weights", {}),
+            "backtest_metrics": result.get("backtest", {}).get("metrics", {}),
+            "meta": result.get("meta", {})
+        }
+        series = result.get("backtest", {}).get("series")
+        if isinstance(series, pd.Series):
+            out["backtest_series"] = [{"date": str(d), "value": float(v)} for d, v in zip(series.index.astype(str), series.values)]
+        else:
+            out["backtest_series"] = None
+
+        return jsonify(out)
+    except Exception as e:
+        logger.exception("API optimize error: %s", e)
+        return jsonify({"error": str(e)}), 500
 
 # Helper pour les panels d'onglets (style cohérent)
 def _tab_panel(child: Any) -> dbc.Card:

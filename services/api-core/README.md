@@ -39,6 +39,8 @@ Ou directement :
 http://127.0.0.1:8000/api/v1/terminal
 ```
 
+Le terminal integre charge maintenant un snapshot agrege unique via `GET /api/v1/terminal/snapshot`.
+
 Seed inclus par défaut :
 
 - utilisateur `cio@hedgefund.local`
@@ -50,6 +52,7 @@ Seed inclus par défaut :
 
 - `GET /` redirect vers le terminal web intégré
 - `GET /api/v1/terminal`
+- `GET /api/v1/terminal/snapshot`
 - `GET /api/v1/health`
 - `GET /api/v1/ready`
 - `GET /api/v1/metrics`
@@ -59,6 +62,8 @@ Seed inclus par défaut :
 - `GET /api/v1/portfolio`
 - `GET /api/v1/portfolio/performance`
 - `GET /api/v1/portfolio/positions`
+- `GET /api/v1/portfolio/barbell`
+- `POST /api/v1/portfolio/barbell`
 - `POST /api/v1/portfolio/rebalance`
 - `POST /api/v1/orders`
 - `GET /api/v1/orders`
@@ -66,7 +71,9 @@ Seed inclus par défaut :
 - `GET /api/v1/orders/fills`
 - `GET /api/v1/risk/portfolio`
 - `GET /api/v1/risk/positions`
+- `GET /api/v1/risk/scenarios`
 - `GET /api/v1/risk/scenario/{scenario_id}`
+- `GET /api/v1/risk/correlations`
 - `GET /api/v1/signals/{symbol}`
 - `GET /api/v1/forecast/{symbol}`
 - `GET /api/v1/regime`
@@ -91,6 +98,12 @@ Le service est actuellement en mode `transitional`: les headers sont supportés 
 - Une même clé réutilisée avec une payload différente retourne `409 Conflict`.
 - Le header de réponse `X-Idempotency-Status` vaut `created` ou `replayed`.
 
+## Robustesse du refresh portefeuille
+
+- `POST /api/v1/portfolio/refresh` ne doit plus échouer pour un simple décalage de schéma de l'outbox.
+- Si la table d'outbox n'est pas encore au bon niveau, l'API passe en mode `fail-open` pour préserver l'opération métier.
+- La correction durable reste l'exécution des migrations Alembic.
+
 ## Event backbone applicatif
 
 - `api-core` publie maintenant ses événements métier critiques dans une table `event_outbox`.
@@ -105,3 +118,68 @@ Le service est actuellement en mode `transitional`: les headers sont supportés 
 - Un bus local en mémoire existe pour brancher des handlers applicatifs avant l'arrivée d'un broker Kafka/Redpanda.
 - Le dispatcher marque désormais `attempt_count`, `last_error` et `dispatched_at` pour fiabiliser les retries.
 - Au démarrage et après les écritures critiques, l'application tente automatiquement un dispatch léger de l'outbox.
+
+## Risk & Scenario Intelligence
+
+- La plateforme expose maintenant un catalogue de stress historiques:
+  - `1929` grande depression
+  - `1973_oil` choc petrolier
+  - `1989` leverage crack
+  - `2000_tech` bulle techno
+  - `2008` crise financiere
+  - `2020_pandemic` pandemie
+  - `2022_inflation` inflation et remontée des taux
+- Chaque scenario inclut:
+  - contexte macro
+  - drawdown et PnL estimes
+  - impacts par poche du portefeuille
+  - decomposition des chocs
+- `GET /api/v1/risk/correlations` fournit une matrice de correlation portefeuille exploitable par les frontends.
+
+## Barbell Strategy
+
+- `GET /api/v1/portfolio/barbell` expose une allocation barbell par defaut, pilotee par le regime de marche.
+- `POST /api/v1/portfolio/barbell` accepte des cibles personnalisees pour la poche defensive, la poche opportuniste et le cash buffer.
+- Le moteur combine :
+  - regime de marche
+  - signaux et forecast par actif
+  - scores de qualite / volatilite
+  - liquidite
+  - poids courants du portefeuille
+- La reponse inclut :
+  - les poids cibles par poche
+  - les allocations par instrument
+  - une reserve `CASH`
+  - les instructions de rebalance suggerees
+
+## Institutional Terminal Snapshot
+
+- `GET /api/v1/terminal/snapshot` agrege en une seule reponse:
+  - portfolio, performance, regime et risk snapshot
+  - history, signals, forecasts et stress scenarios
+  - correlation matrix et position risk
+  - barbell allocation
+  - orders, fills, research, users, audit logs
+  - outbox event summary
+- Le terminal web FastAPI consomme ce snapshot pour reduire la latence applicative et le bruit reseau.
+
+## Alembic
+
+Baseline et durcissement outbox:
+
+```bash
+alembic upgrade head
+```
+
+Si la base existait deja avant l'introduction d'Alembic et que vous voulez seulement aligner l'historique local apres verification:
+
+```bash
+alembic stamp head
+```
+
+Workflow recommande ensuite:
+
+1. modifier les modeles SQLAlchemy
+2. generer une revision Alembic
+3. relire la migration
+4. appliquer avec `alembic upgrade head`

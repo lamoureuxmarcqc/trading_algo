@@ -40,6 +40,7 @@ export default async function DashboardPage() {
     `Correlation risk currently reading ${formatPercent(data.risk.correlation_risk, 1)}`,
     `Regime confidence ${formatPercent(data.regime.confidence, 0)}: ${data.regime.recommendation}`
   ];
+  const severeScenarios = [...data.scenarios].slice(0, 4);
 
   return (
     <main className="min-h-screen px-6 py-8 md:px-10">
@@ -122,18 +123,14 @@ export default async function DashboardPage() {
             <div className="mt-6 rounded-3xl border border-line bg-gradient-to-br from-accent/10 via-transparent to-gain/10 p-5">
               <p className="metric-label">Stress Panel</p>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <div>
-                  <p className="text-sm text-slate-400">{data.scenarios[0]?.name ?? "2008 replay"}</p>
-                  <p className="mt-2 font-mono text-2xl text-loss">
-                    {formatPercent(data.scenarios[0]?.drawdown_impact ?? 0, 1)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-slate-400">{data.scenarios[1]?.name ?? "Rates +2%"}</p>
-                  <p className="mt-2 font-mono text-2xl text-loss">
-                    {formatPercent(data.scenarios[1]?.drawdown_impact ?? 0, 1)}
-                  </p>
-                </div>
+                {severeScenarios.map((scenario) => (
+                  <div key={scenario.scenario_id}>
+                    <p className="text-sm text-slate-400">{scenario.name}</p>
+                    <p className="mt-2 font-mono text-2xl text-loss">
+                      {formatPercent(scenario.drawdown_impact, 1)}
+                    </p>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

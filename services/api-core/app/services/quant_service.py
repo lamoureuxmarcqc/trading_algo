@@ -33,7 +33,7 @@ class QuantInsightsService:
         self.regime_engine = MarketRegimeEngine()
         self.risk_manager = RiskManager()
         self._history_cache: dict[tuple[str, str], CachedFrame] = {}
-        self._snapshot_cache: dict[tuple[str, ...], CachedSnapshot] = {}
+        self._snapshot_cache: dict[tuple[tuple[str, str], ...], CachedSnapshot] = {}
         self._cache_ttl = timedelta(minutes=20)
         self._snapshot_ttl = timedelta(seconds=60)
         self._research_universe = [
@@ -48,19 +48,36 @@ class QuantInsightsService:
         ]
 
     def get_live_market_snapshot(self, symbols: list[str]) -> dict[str, dict[str, float | None]]:
-        if not symbols:
+        return self.get_live_market_snapshot_for_requests({symbol: symbol for symbol in symbols})
+
+    def get_live_market_snapshot_for_requests(
+        self,
+        symbol_requests: dict[str, str | None],
+    ) -> dict[str, dict[str, float | None]]:
+        if not symbol_requests:
             return {}
 
-        cache_key = tuple(sorted(symbols))
+        cache_key = tuple(sorted((symbol, request or "") for symbol, request in symbol_requests.items()))
         cached = self._snapshot_cache.get(cache_key)
         if cached and datetime.now() - cached.timestamp < self._snapshot_ttl:
             return dict(cached.data)
 
-        prices = self.extractor.get_bulk_prices(symbols) or {}
+        request_symbols = sorted({request for request in symbol_requests.values() if request})
+        prices = self.extractor.get_bulk_prices(request_symbols) if request_symbols else {}
         snapshot: dict[str, dict[str, float | None]] = {}
-        for symbol in symbols:
-            latest_price = prices.get(symbol)
-            history = self._history(symbol, period="1mo")
+
+        for symbol, request_symbol in symbol_requests.items():
+            if not request_symbol:
+                snapshot[symbol] = {"latest_price": None, "previous_close": None}
+                continue
+
+            latest_price = prices.get(request_symbol)
+            history = self._history(
+                symbol,
+                period="1mo",
+                market_data_symbol=request_symbol,
+                market_data_enabled=True,
+            )
             prev_close = None
             if not history.empty and "Close" in history.columns:
                 closes = history["Close"].dropna()
@@ -78,6 +95,7 @@ class QuantInsightsService:
                 "latest_price": float(latest_price) if latest_price is not None else None,
                 "previous_close": float(prev_close) if prev_close is not None else None,
             }
+
         self._snapshot_cache[cache_key] = CachedSnapshot(data=dict(snapshot), timestamp=datetime.now())
         return snapshot
 
@@ -87,6 +105,17 @@ class QuantInsightsService:
         gross_exposure: float,
         net_exposure: float,
     ) -> dict[str, float]:
+        if not positions:
+            return {
+                "var_95": -0.023,
+                "cvar_95": -0.034,
+                "beta": 1.08,
+                "drawdown": -0.081,
+                "gross_exposure": gross_exposure,
+                "net_exposure": net_exposure,
+                "concentration_risk": 0.0,
+                "correlation_risk": 0.62,
+            }
         returns_map, weights = self._portfolio_returns(positions)
         if not returns_map or not weights:
             return {
@@ -141,11 +170,21 @@ class QuantInsightsService:
         results: list[dict[str, float | str]] = []
 
         for position in positions:
-            returns = self._returns_series(position.symbol, period="1y")
+            request_symbol = self._position_market_data_symbol(position)
+            returns = self._returns_series(
+                position.symbol,
+                period="1y",
+                market_data_symbol=request_symbol,
+                market_data_enabled=self._position_market_data_enabled(position),
+            )
             beta = self.risk_manager.calculate_beta(returns, self._align_series(returns, benchmark_returns))
             var_95 = self.risk_manager.calculate_value_at_risk(returns, 0.95)
             cvar_95 = self._calculate_cvar(returns, 0.95)
-            liquidity_score = self._liquidity_score(position.symbol)
+            liquidity_score = self._liquidity_score(
+                position.symbol,
+                market_data_symbol=request_symbol,
+                market_data_enabled=self._position_market_data_enabled(position),
+            )
             weight = (float(position.market_value) / total_value) if total_value else 0.0
 
             results.append(
@@ -160,8 +199,58 @@ class QuantInsightsService:
             )
         return results
 
-    def compute_signal(self, symbol: str, current_price: float | None = None) -> dict[str, float | str]:
-        df = self._history(symbol, period="1y")
+    def compute_correlation_matrix(self, positions: list[Any]) -> dict[str, Any]:
+        symbols = [position.symbol for position in positions]
+        if not symbols:
+            return {
+                "symbols": [],
+                "matrix": [],
+                "as_of": None,
+                "methodology": "Daily close-to-close return correlation over the last 1 year.",
+            }
+
+        returns_map, _ = self._portfolio_returns(positions)
+        if not returns_map:
+            return self._fallback_correlation_matrix(symbols)
+
+        returns_df = pd.DataFrame(returns_map).dropna(how="all").ffill().dropna()
+        if returns_df.empty:
+            return self._fallback_correlation_matrix(symbols)
+
+        correlation = returns_df.corr().fillna(0.0).clip(-1.0, 1.0)
+        ordered_symbols = list(correlation.columns)
+        matrix = [
+            [round(float(correlation.loc[row_symbol, col_symbol]), 4) for col_symbol in ordered_symbols]
+            for row_symbol in ordered_symbols
+        ]
+
+        as_of = None
+        if len(returns_df.index) > 0:
+            try:
+                as_of = pd.Timestamp(returns_df.index.max()).to_pydatetime().isoformat()
+            except Exception:
+                as_of = None
+
+        return {
+            "symbols": ordered_symbols,
+            "matrix": matrix,
+            "as_of": as_of,
+            "methodology": "Daily close-to-close return correlation over the last 1 year.",
+        }
+
+    def compute_signal(
+        self,
+        symbol: str,
+        current_price: float | None = None,
+        market_data_symbol: str | None = None,
+        market_data_enabled: bool = True,
+    ) -> dict[str, float | str]:
+        df = self._history(
+            symbol,
+            period="1y",
+            market_data_symbol=market_data_symbol,
+            market_data_enabled=market_data_enabled,
+        )
         regime = self.compute_regime()
         if df.empty or "Close" not in df.columns:
             return {
@@ -230,8 +319,19 @@ class QuantInsightsService:
             "market_regime": str(regime["regime"]),
         }
 
-    def compute_forecast(self, symbol: str, current_price: float | None = None) -> dict[str, float | str]:
-        df = self._history(symbol, period="1y")
+    def compute_forecast(
+        self,
+        symbol: str,
+        current_price: float | None = None,
+        market_data_symbol: str | None = None,
+        market_data_enabled: bool = True,
+    ) -> dict[str, float | str]:
+        df = self._history(
+            symbol,
+            period="1y",
+            market_data_symbol=market_data_symbol,
+            market_data_enabled=market_data_enabled,
+        )
         regime = self.compute_regime()
         if df.empty or "Close" not in df.columns:
             base_price = float(current_price or 250.0)
@@ -397,21 +497,42 @@ class QuantInsightsService:
             )
         return sorted(results, key=lambda item: float(item["average_factor_score"]), reverse=True)
 
-    def _history(self, symbol: str, period: str = "1y") -> pd.DataFrame:
-        key = (symbol, period)
+    def _history(
+        self,
+        symbol: str,
+        period: str = "1y",
+        market_data_symbol: str | None = None,
+        market_data_enabled: bool = True,
+    ) -> pd.DataFrame:
+        request_symbol = self._resolve_market_data_symbol(symbol, market_data_symbol, market_data_enabled)
+        if not request_symbol:
+            return pd.DataFrame()
+
+        key = (request_symbol, period)
         cached = self._history_cache.get(key)
         if cached and datetime.now() - cached.timestamp < self._cache_ttl:
             return cached.data.copy()
 
-        df = self.extractor.get_historical_data(symbol, period=period)
+        df = self.extractor.get_historical_data(request_symbol, period=period)
         if df is None or df.empty:
             return pd.DataFrame()
 
         self._history_cache[key] = CachedFrame(data=df.copy(), timestamp=datetime.now())
         return df.copy()
 
-    def _returns_series(self, symbol: str, period: str = "1y") -> pd.Series:
-        df = self._history(symbol, period=period)
+    def _returns_series(
+        self,
+        symbol: str,
+        period: str = "1y",
+        market_data_symbol: str | None = None,
+        market_data_enabled: bool = True,
+    ) -> pd.Series:
+        df = self._history(
+            symbol,
+            period=period,
+            market_data_symbol=market_data_symbol,
+            market_data_enabled=market_data_enabled,
+        )
         if df.empty or "Close" not in df.columns:
             return pd.Series(dtype=float)
         returns = df["Close"].pct_change().replace([np.inf, -np.inf], np.nan).dropna()
@@ -426,15 +547,31 @@ class QuantInsightsService:
         returns_map: dict[str, pd.Series] = {}
         weights: dict[str, float] = {}
         for position in positions:
-            returns = self._returns_series(position.symbol, period="1y")
+            request_symbol = self._position_market_data_symbol(position)
+            returns = self._returns_series(
+                position.symbol,
+                period="1y",
+                market_data_symbol=request_symbol,
+                market_data_enabled=self._position_market_data_enabled(position),
+            )
             if returns.empty:
                 continue
             returns_map[position.symbol] = returns
             weights[position.symbol] = float(position.market_value) / total_value
         return returns_map, weights
 
-    def _factor_metrics(self, symbol: str) -> dict[str, float]:
-        df = self._history(symbol, period="1y")
+    def _factor_metrics(
+        self,
+        symbol: str,
+        market_data_symbol: str | None = None,
+        market_data_enabled: bool = True,
+    ) -> dict[str, float]:
+        df = self._history(
+            symbol,
+            period="1y",
+            market_data_symbol=market_data_symbol,
+            market_data_enabled=market_data_enabled,
+        )
         if df.empty or "Close" not in df.columns:
             return {"momentum_score": 0.5, "quality_score": 0.5, "volatility_score": 0.5}
 
@@ -456,8 +593,17 @@ class QuantInsightsService:
             "volatility_score": volatility_score,
         }
 
-    def _factor_score(self, symbol: str) -> float:
-        metrics = self._factor_metrics(symbol)
+    def _factor_score(
+        self,
+        symbol: str,
+        market_data_symbol: str | None = None,
+        market_data_enabled: bool = True,
+    ) -> float:
+        metrics = self._factor_metrics(
+            symbol,
+            market_data_symbol=market_data_symbol,
+            market_data_enabled=market_data_enabled,
+        )
         return float(
             metrics["momentum_score"] * 0.45
             + metrics["quality_score"] * 0.35
@@ -496,8 +642,36 @@ class QuantInsightsService:
             return 0.0
         return float(values.mean())
 
-    def _liquidity_score(self, symbol: str) -> float:
-        df = self._history(symbol, period="6mo")
+    @staticmethod
+    def _fallback_correlation_matrix(symbols: list[str]) -> dict[str, Any]:
+        matrix = []
+        for row_symbol in symbols:
+            row = []
+            for col_symbol in symbols:
+                if row_symbol == col_symbol:
+                    row.append(1.0)
+                else:
+                    row.append(0.45)
+            matrix.append(row)
+        return {
+            "symbols": symbols,
+            "matrix": matrix,
+            "as_of": None,
+            "methodology": "Fallback static correlation matrix used when insufficient market history is available.",
+        }
+
+    def _liquidity_score(
+        self,
+        symbol: str,
+        market_data_symbol: str | None = None,
+        market_data_enabled: bool = True,
+    ) -> float:
+        df = self._history(
+            symbol,
+            period="6mo",
+            market_data_symbol=market_data_symbol,
+            market_data_enabled=market_data_enabled,
+        )
         if df.empty or "Volume" not in df.columns or "Close" not in df.columns:
             return 0.5
         dollar_volume = (df["Close"] * df["Volume"]).tail(20).replace([np.inf, -np.inf], np.nan).dropna()
@@ -505,6 +679,24 @@ class QuantInsightsService:
             return 0.5
         avg_dollar_volume = float(dollar_volume.mean())
         return float(np.clip(np.log10(avg_dollar_volume + 1) / 9, 0.05, 0.99))
+
+    @staticmethod
+    def _resolve_market_data_symbol(
+        symbol: str,
+        market_data_symbol: str | None,
+        market_data_enabled: bool,
+    ) -> str | None:
+        if not market_data_enabled:
+            return None
+        return market_data_symbol or symbol
+
+    @staticmethod
+    def _position_market_data_symbol(position: Any) -> str | None:
+        return getattr(position, "market_data_symbol", None) or getattr(position, "symbol", None)
+
+    @staticmethod
+    def _position_market_data_enabled(position: Any) -> bool:
+        return bool(getattr(position, "market_data_enabled", True))
 
     @staticmethod
     def _drawdown(returns: pd.Series) -> float:

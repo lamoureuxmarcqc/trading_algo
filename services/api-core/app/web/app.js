@@ -7,7 +7,7 @@ const fmtCurrency = (value, currency = "USD") =>
 
 const fmtPercent = (value, digits = 1) => `${((value ?? 0) * 100).toFixed(digits)}%`;
 const fmtTime = (value) => new Date(value).toLocaleString();
-const roleLabel = (value) => String(value ?? "").replace("_", " ");
+const roleLabel = (value) => String(value ?? "").replaceAll("_", " ");
 
 function emptyRow(colspan, label) {
   return `<tr><td colspan="${colspan}" class="empty-state">${label}</td></tr>`;
@@ -15,10 +15,10 @@ function emptyRow(colspan, label) {
 
 function toneChipClass(value) {
   const token = String(value ?? "").toLowerCase();
-  if (["filled", "enabled", "admin", "trader", "risk_on", "overweight", "buy"].includes(token)) {
+  if (["filled", "enabled", "admin", "trader", "risk_on", "overweight", "buy", "delivered"].includes(token)) {
     return "tone-chip gain";
   }
-  if (["cancelled", "rejected", "underweight", "risk_off", "defensive", "sell"].includes(token)) {
+  if (["cancelled", "rejected", "underweight", "risk_off", "defensive", "sell", "failed"].includes(token)) {
     return "tone-chip loss";
   }
   return "tone-chip neutral";
@@ -80,15 +80,17 @@ function renderSignals({ signals, forecasts, portfolio }) {
     body.innerHTML = emptyRow(6, "No signals available.");
     return;
   }
+
+  const forecastMap = new Map(forecasts.map((forecast) => [forecast.symbol, forecast]));
   body.innerHTML = signals
     .map((signal) => {
       const position = portfolio.positions.find((item) => item.symbol === signal.symbol);
-      const forecast = forecasts.find((item) => item.symbol === signal.symbol);
+      const forecast = forecastMap.get(signal.symbol);
       return `
         <tr>
           <td>${signal.symbol}</td>
           <td>${fmtCurrency(position?.market_price ?? 0, portfolio.base_currency)}</td>
-          <td class="gain">${fmtPercent(signal.buy_probability, 0)}</td>
+          <td class="${signal.buy_probability >= 0.5 ? "gain" : "loss"}">${fmtPercent(signal.buy_probability, 0)}</td>
           <td>${fmtCurrency(forecast?.price_target ?? 0, portfolio.base_currency)}</td>
           <td>${fmtPercent(signal.confidence_score, 0)}</td>
           <td><span class="${toneChipClass(signal.market_regime)}">${roleLabel(signal.market_regime)}</span></td>
@@ -123,14 +125,131 @@ function renderPositions(portfolio) {
 function renderScenarios(scenarios) {
   const stack = document.getElementById("risk-stack");
   stack.innerHTML = scenarios
-    .map(
-      (scenario) => `
+    .map((scenario) => {
+      const primaryMacro = scenario.macro_context?.[0];
+      return `
         <div class="risk-card">
           <div class="micro">${scenario.scenario_id}</div>
           <h3>${scenario.name}</h3>
           <div class="impact loss">${fmtPercent(scenario.drawdown_impact, 1)}</div>
           <div class="metric-delta">PnL impact ${fmtCurrency(scenario.estimated_pnl_impact)}</div>
+          <div class="metric-delta">${scenario.period ?? ""}</div>
+          <div class="metric-delta">${primaryMacro ? `${primaryMacro.label}: ${primaryMacro.value}` : ""}</div>
         </div>
+      `;
+    })
+    .join("");
+}
+
+function renderBarbell(barbell) {
+  const regime = document.getElementById("barbell-regime");
+  const metrics = document.getElementById("barbell-metrics");
+  const rationale = document.getElementById("barbell-rationale");
+  const table = document.getElementById("barbell-table");
+
+  regime.textContent = roleLabel(barbell.regime);
+  rationale.textContent = barbell.rationale;
+  metrics.innerHTML = [
+    {
+      title: "Defensive",
+      value: fmtPercent(barbell.defensive_weight),
+      tone: ""
+    },
+    {
+      title: "Opportunistic",
+      value: fmtPercent(barbell.opportunistic_weight),
+      tone: ""
+    },
+    {
+      title: "Cash Buffer",
+      value: fmtPercent(barbell.cash_buffer_weight),
+      tone: ""
+    }
+  ]
+    .map(
+      (metric) => `
+        <div class="panel metric-card">
+          <h3>${metric.title}</h3>
+          <div class="metric-value ${metric.tone}">${metric.value}</div>
+        </div>
+      `
+    )
+    .join("");
+
+  if (!barbell.allocations.length) {
+    table.innerHTML = emptyRow(6, "No barbell allocation available.");
+    return;
+  }
+
+  table.innerHTML = barbell.allocations
+    .map(
+      (item) => `
+        <tr>
+          <td>${item.symbol}</td>
+          <td><span class="${toneChipClass(item.bucket)}">${roleLabel(item.bucket)}</span></td>
+          <td>${roleLabel(item.role)}</td>
+          <td>${fmtPercent(item.current_weight, 2)}</td>
+          <td>${fmtPercent(item.target_weight, 2)}</td>
+          <td class="${item.delta_weight >= 0 ? "gain" : "loss"}">${fmtPercent(item.delta_weight, 2)}</td>
+        </tr>
+      `
+    )
+    .join("");
+}
+
+function renderEventSummary(summary, generatedAt) {
+  const metrics = document.getElementById("event-summary-metrics");
+  const note = document.getElementById("event-summary-note");
+  const timestamp = document.getElementById("snapshot-generated-at");
+
+  timestamp.textContent = generatedAt ? `Snapshot ${fmtTime(generatedAt)}` : "--";
+  metrics.innerHTML = [
+    { title: "Delivered", value: String(summary.delivered ?? 0), tone: "gain" },
+    { title: "Pending", value: String(summary.pending ?? 0), tone: "" },
+    { title: "Failed", value: String(summary.failed ?? 0), tone: "loss" }
+  ]
+    .map(
+      (metric) => `
+        <div class="panel metric-card">
+          <h3>${metric.title}</h3>
+          <div class="metric-value ${metric.tone}">${metric.value}</div>
+        </div>
+      `
+    )
+    .join("");
+
+  note.textContent =
+    summary.failed > 0
+      ? `Outbox attention required: ${summary.failed} failed event(s) need investigation or replay.`
+      : `Outbox healthy: ${summary.delivered} delivered, ${summary.pending} pending.`;
+}
+
+function renderCorrelationMatrix(correlation) {
+  const head = document.getElementById("correlation-head");
+  const body = document.getElementById("correlation-table");
+
+  if (!correlation || !correlation.symbols?.length) {
+    head.innerHTML = "";
+    body.innerHTML = emptyRow(1, "No correlation matrix available.");
+    return;
+  }
+
+  head.innerHTML = `
+    <tr>
+      <th>Symbol</th>
+      ${correlation.symbols.map((symbol) => `<th>${symbol}</th>`).join("")}
+    </tr>
+  `;
+
+  body.innerHTML = correlation.symbols
+    .map(
+      (rowSymbol, rowIndex) => `
+        <tr>
+          <td>${rowSymbol}</td>
+          ${correlation.matrix[rowIndex]
+            .map((value) => `<td>${Number(value).toFixed(2)}</td>`)
+            .join("")}
+        </tr>
       `
     )
     .join("");
@@ -141,17 +260,17 @@ function renderHistory(history, portfolio) {
   const recent = history.slice(-8).reverse();
   body.innerHTML = recent.length
     ? recent
-    .map(
-      (point) => `
-        <tr>
-          <td>${fmtTime(point.recorded_at)}</td>
-          <td>${fmtCurrency(point.nav, portfolio.base_currency)}</td>
-          <td>${fmtCurrency(point.cash, portfolio.base_currency)}</td>
-          <td>${fmtPercent(point.gross_exposure, 1)}</td>
-        </tr>
-      `
-    )
-    .join("")
+        .map(
+          (point) => `
+            <tr>
+              <td>${fmtTime(point.recorded_at)}</td>
+              <td>${fmtCurrency(point.nav, portfolio.base_currency)}</td>
+              <td>${fmtCurrency(point.cash, portfolio.base_currency)}</td>
+              <td>${fmtPercent(point.gross_exposure, 1)}</td>
+            </tr>
+          `
+        )
+        .join("")
     : emptyRow(4, "No NAV snapshots yet.");
 
   const svg = document.getElementById("nav-sparkline");
@@ -258,7 +377,7 @@ function renderFills(fills) {
           <td>${fill.quantity}</td>
           <td>${fmtCurrency(fill.price)}</td>
           <td>${fill.venue}</td>
-          <td>${new Date(fill.filled_at).toLocaleString()}</td>
+          <td>${fmtTime(fill.filled_at)}</td>
         </tr>
       `
     )
@@ -277,7 +396,7 @@ function renderResearch(items) {
         <tr>
           <td>${item.symbol}</td>
           <td>${item.sector}</td>
-          <td class="gain">${fmtPercent(item.buy_probability, 0)}</td>
+          <td class="${item.buy_probability >= 0.5 ? "gain" : "loss"}">${fmtPercent(item.buy_probability, 0)}</td>
           <td class="${item.expected_return >= 0 ? "gain" : "loss"}">${fmtPercent(item.expected_return, 1)}</td>
           <td>${fmtPercent(item.factor_score, 0)}</td>
           <td><span class="${toneChipClass(item.market_regime)}">${roleLabel(item.market_regime)}</span></td>
@@ -298,7 +417,7 @@ function renderSectors(items) {
       (item) => `
         <tr>
           <td>${item.sector}</td>
-          <td class="gain">${fmtPercent(item.average_buy_probability, 0)}</td>
+          <td class="${item.average_buy_probability >= 0.5 ? "gain" : "loss"}">${fmtPercent(item.average_buy_probability, 0)}</td>
           <td class="${item.average_expected_return >= 0 ? "gain" : "loss"}">${fmtPercent(item.average_expected_return, 1)}</td>
           <td>${fmtPercent(item.average_factor_score, 0)}</td>
           <td><span class="${toneChipClass(item.stance)}">${roleLabel(item.stance)}</span></td>
@@ -452,75 +571,37 @@ async function loadTerminal(runRefresh = true) {
       try {
         await fetchJson("/portfolio/refresh", { method: "POST" });
       } catch (error) {
-        document.getElementById("order-result").textContent =
-          `Market refresh warning: ${String(error)}`;
+        document.getElementById("order-result").textContent = `Market refresh warning: ${String(error)}`;
       }
     }
 
-    const [portfolio, performance, risk, regime, history] = await Promise.all([
-      fetchJson("/portfolio"),
-      fetchJson("/portfolio/performance"),
-      fetchJson("/risk/portfolio"),
-      fetchJson("/regime"),
-      fetchJson("/portfolio/history")
-    ]);
+    const snapshot = await fetchJson("/terminal/snapshot");
 
-    const [
-      signalsResult,
-      forecastsResult,
-      scenariosResult,
-      ordersResult,
-      fillsResult,
-      positionRiskResult,
-      researchResult,
-      factorsResult,
-      sectorsResult,
-      usersResult,
-      auditResult
-    ] = await Promise.allSettled([
-      Promise.all(
-        portfolio.positions.slice(0, 4).map((position) => fetchJson(`/signals/${position.symbol}`))
-      ),
-      Promise.all(
-        portfolio.positions.slice(0, 4).map((position) => fetchJson(`/forecast/${position.symbol}`))
-      ),
-      Promise.all([fetchJson("/risk/scenario/2008"), fetchJson("/risk/scenario/rates_up_2pct")]),
-      fetchJson("/orders"),
-      fetchJson("/orders/fills"),
-      fetchJson("/risk/positions"),
-      fetchJson("/research/screener"),
-      fetchJson("/research/factors"),
-      fetchJson("/research/sectors"),
-      fetchJson("/admin/users"),
-      fetchJson("/admin/audit")
-    ]);
-
-    renderMetrics({ portfolio, performance, risk, regime });
-    renderHistory(history, portfolio);
-    renderPositions(portfolio);
+    renderMetrics(snapshot);
+    renderHistory(snapshot.history, snapshot.portfolio);
     renderSignals({
-      signals: signalsResult.status === "fulfilled" ? signalsResult.value : [],
-      forecasts: forecastsResult.status === "fulfilled" ? forecastsResult.value : [],
-      portfolio
+      signals: snapshot.signals,
+      forecasts: snapshot.forecasts,
+      portfolio: snapshot.portfolio
     });
-    renderScenarios(scenariosResult.status === "fulfilled" ? scenariosResult.value : []);
-    renderOrders(ordersResult.status === "fulfilled" ? ordersResult.value : []);
-    renderFills(fillsResult.status === "fulfilled" ? fillsResult.value : []);
-    renderPositionRisk(positionRiskResult.status === "fulfilled" ? positionRiskResult.value : []);
-    renderResearch(researchResult.status === "fulfilled" ? researchResult.value : []);
-    renderFactors(factorsResult.status === "fulfilled" ? factorsResult.value : []);
-    renderSectors(sectorsResult.status === "fulfilled" ? sectorsResult.value : []);
-    renderUsers(usersResult.status === "fulfilled" ? usersResult.value : []);
-    renderAudit(auditResult.status === "fulfilled" ? auditResult.value : []);
+    renderPositions(snapshot.portfolio);
+    renderScenarios(snapshot.scenarios);
+    renderBarbell(snapshot.barbell);
+    renderEventSummary(snapshot.event_summary, snapshot.generated_at);
+    renderPositionRisk(snapshot.position_risk);
+    renderCorrelationMatrix(snapshot.correlation_matrix);
+    renderOrders(snapshot.orders);
+    renderFills(snapshot.fills);
+    renderResearch(snapshot.research);
+    renderFactors(snapshot.factors);
+    renderSectors(snapshot.sectors);
+    renderUsers(snapshot.users);
+    renderAudit(snapshot.audit_logs);
 
     badge.textContent = "Connected";
     badge.classList.remove("loss");
     badge.classList.add("gain");
-    renderMarketTimestamp(portfolio);
-
-    if (ordersResult.status === "rejected") {
-      document.getElementById("order-result").textContent = String(ordersResult.reason);
-    }
+    renderMarketTimestamp(snapshot.portfolio);
   } catch (error) {
     badge.textContent = "API unavailable";
     badge.classList.remove("gain");

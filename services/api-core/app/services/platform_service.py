@@ -5,8 +5,11 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import json
+import logging
+import numpy as np
 
 from sqlalchemy import Select, func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.security import hash_password
@@ -29,10 +32,20 @@ from app.db.models import (
 )
 from app.events.bus import event_bus
 from app.events.contracts import DomainEvent
-from app.schemas.admin import AdminUser, AuditLogEntry, DomainEventEntry, DomainEventSummary
+from app.schemas.admin import (
+    AdminSymbolEntry,
+    AdminSymbolMarketDataUpdate,
+    AdminUser,
+    AuditLogEntry,
+    DomainEventEntry,
+    DomainEventSummary,
+)
 from app.schemas.ai import ForecastResponse, RegimeResponse, SignalResponse
 from app.schemas.auth import UserProfile
 from app.schemas.portfolio import (
+    BarbellAllocationItem,
+    BarbellAllocationResponse,
+    BarbellStrategyConfig,
     PortfolioHistoryPoint,
     PortfolioOverview,
     PortfolioPerformance,
@@ -43,10 +56,24 @@ from app.schemas.portfolio import (
     RebalanceResponse,
 )
 from app.schemas.research import FactorRank, ResearchIdea, SectorRotation
-from app.schemas.risk import PortfolioRiskSnapshot, PositionRisk, ScenarioResult, ScenarioShock
+from app.schemas.risk import (
+    CorrelationMatrixResponse,
+    PortfolioRiskSnapshot,
+    PositionRisk,
+    ScenarioImpactItem,
+    ScenarioMacroMetric,
+    ScenarioResult,
+    ScenarioShock,
+)
 from app.schemas.trading import Fill as FillSchema
 from app.schemas.trading import OrderCreate, OrderResponse
+from app.schemas.terminal import TerminalSnapshotResponse
 from app.services.quant_service import quant_insights_service
+from trading_algo.strategy.barbell_strategy import (
+    BarbellCandidate,
+    BarbellConfig,
+    BarbellStrategyEngine,
+)
 
 
 @dataclass
@@ -59,6 +86,8 @@ class PositionView:
     daily_pnl: float
     unrealized_pnl: float
     currency: str
+    market_data_enabled: bool
+    market_data_symbol: str | None
 
 
 @dataclass
@@ -69,6 +98,10 @@ class OrderSubmissionResult:
 
 class IdempotencyConflictError(ValueError):
     """Raised when an idempotency key is reused with a different request payload."""
+
+
+logger = logging.getLogger(__name__)
+barbell_strategy_engine = BarbellStrategyEngine()
 
 
 class PlatformService:
@@ -241,6 +274,112 @@ class PlatformService:
             )
             for snapshot in reversed(snapshots)
         ]
+
+    def get_barbell_allocation(
+        self,
+        config: BarbellStrategyConfig | None = None,
+    ) -> BarbellAllocationResponse:
+        config = config or BarbellStrategyConfig()
+        rows = self._position_rows(refresh_market_data=True)
+        overview = self.get_portfolio_overview(refresh_market_data=False)
+        regime = self.get_regime()
+        current_weights = self._current_weights()
+        current_cash_weight = (overview.cash / overview.nav) if overview.nav > 0 else 1.0
+        internal_config = BarbellConfig(
+            defensive_weight_target=config.defensive_weight_target,
+            opportunistic_weight_target=config.opportunistic_weight_target,
+            cash_buffer_target=config.cash_buffer_target,
+            max_positions_per_bucket=config.max_positions_per_bucket,
+            min_rebalance_delta=config.min_rebalance_delta,
+        )
+
+        candidates = self._build_barbell_candidates(rows, current_weights)
+        target_buckets = barbell_strategy_engine.resolve_bucket_targets(str(regime.regime), internal_config)
+        defensive_selection = barbell_strategy_engine.select_candidates(
+            candidates,
+            "defensive",
+            config.max_positions_per_bucket,
+        )
+        opportunistic_selection = barbell_strategy_engine.select_candidates(
+            candidates,
+            "opportunistic",
+            config.max_positions_per_bucket,
+        )
+
+        target_weights = {
+            **barbell_strategy_engine.allocate_bucket(defensive_selection, target_buckets["defensive"]),
+            **barbell_strategy_engine.allocate_bucket(opportunistic_selection, target_buckets["opportunistic"]),
+        }
+        target_weights["CASH"] = target_buckets["cash"]
+
+        candidate_map = {candidate.symbol: candidate for candidate in candidates}
+        allocations: list[BarbellAllocationItem] = []
+        bucket_order = {"defensive": 0, "opportunistic": 1, "cash": 2}
+
+        for symbol, target_weight in target_weights.items():
+            if symbol == "CASH":
+                current_weight = current_cash_weight
+                allocations.append(
+                    BarbellAllocationItem(
+                        symbol="CASH",
+                        bucket="cash",
+                        role="liquidity_reserve",
+                        current_weight=round(current_weight, 4),
+                        target_weight=round(target_weight, 4),
+                        delta_weight=round(target_weight - current_weight, 4),
+                        buy_probability=0.5,
+                        expected_return=0.0,
+                        confidence_score=1.0,
+                        rationale="Cash reserve absorbs volatility and funds opportunistic redeployment.",
+                    )
+                )
+                continue
+
+            candidate = candidate_map[symbol]
+            current_weight = current_weights.get(symbol, 0.0)
+            allocations.append(
+                BarbellAllocationItem(
+                    symbol=symbol,
+                    bucket=candidate.bucket,
+                    role=candidate.role,
+                    current_weight=round(current_weight, 4),
+                    target_weight=round(target_weight, 4),
+                    delta_weight=round(target_weight - current_weight, 4),
+                    buy_probability=round(candidate.buy_probability, 4),
+                    expected_return=round(candidate.expected_return, 4),
+                    confidence_score=round(candidate.confidence_score, 4),
+                    rationale=candidate.rationale,
+                )
+            )
+
+        allocations.sort(
+            key=lambda item: (bucket_order.get(item.bucket, 9), -item.target_weight, item.symbol)
+        )
+
+        rebalance_instructions = [
+            RebalanceInstruction(
+                symbol=item.symbol,
+                action="BUY" if item.delta_weight > 0 else "SELL",
+                delta_weight=item.delta_weight,
+            )
+            for item in allocations
+            if item.symbol != "CASH" and abs(item.delta_weight) >= config.min_rebalance_delta
+        ]
+
+        return BarbellAllocationResponse(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            regime=str(regime.regime),
+            defensive_weight=round(target_buckets["defensive"], 4),
+            opportunistic_weight=round(target_buckets["opportunistic"], 4),
+            cash_buffer_weight=round(target_buckets["cash"], 4),
+            rationale=self._barbell_rationale(
+                regime=str(regime.regime),
+                confidence=float(regime.confidence),
+                target_buckets=target_buckets,
+            ),
+            allocations=allocations,
+            rebalance_instructions=rebalance_instructions,
+        )
 
     def rebalance_portfolio(self, payload: RebalanceRequest) -> RebalanceResponse:
         current_weights = self._current_weights()
@@ -428,8 +567,9 @@ class PlatformService:
 
     def get_portfolio_risk(self) -> PortfolioRiskSnapshot:
         overview = self.get_portfolio_overview()
+        rows = self._position_rows(refresh_market_data=False)
         metrics = quant_insights_service.compute_portfolio_risk(
-            positions=overview.positions,
+            positions=rows,
             gross_exposure=overview.gross_exposure,
             net_exposure=overview.net_exposure,
         )
@@ -440,47 +580,27 @@ class PlatformService:
         return [PositionRisk(**item) for item in quant_insights_service.compute_position_risks(rows)]
 
     def get_scenario_result(self, scenario_id: str) -> ScenarioResult | None:
-        scenarios = {
-            "2008": ScenarioResult(
-                scenario_id="2008",
-                name="Global Financial Crisis",
-                estimated_pnl_impact=-184000,
-                drawdown_impact=-0.137,
-                shocks=[
-                    ScenarioShock(factor="Equities", shock=-0.18, contribution=-124000),
-                    ScenarioShock(factor="Credit Spread", shock=0.03, contribution=-40000),
-                    ScenarioShock(factor="Volatility", shock=0.45, contribution=-20000),
-                ],
-            ),
-            "covid": ScenarioResult(
-                scenario_id="covid",
-                name="COVID Liquidity Shock",
-                estimated_pnl_impact=-121500,
-                drawdown_impact=-0.092,
-                shocks=[
-                    ScenarioShock(factor="Equities", shock=-0.11, contribution=-89000),
-                    ScenarioShock(factor="Rates", shock=-0.015, contribution=8500),
-                    ScenarioShock(factor="USD", shock=0.06, contribution=-41000),
-                ],
-            ),
-            "rates_up_2pct": ScenarioResult(
-                scenario_id="rates_up_2pct",
-                name="Rates +2%",
-                estimated_pnl_impact=-64500,
-                drawdown_impact=-0.048,
-                shocks=[
-                    ScenarioShock(factor="Rates", shock=0.02, contribution=-42000),
-                    ScenarioShock(factor="Growth", shock=-0.06, contribution=-22500),
-                ],
-            ),
-        }
+        scenarios = {scenario.scenario_id: scenario for scenario in self.list_scenarios()}
         return scenarios.get(scenario_id)
+
+    def list_scenarios(self) -> list[ScenarioResult]:
+        overview = self.get_portfolio_overview()
+        rows = self._position_rows(refresh_market_data=True)
+        scenario_results = [self._build_scenario_result(config, overview, rows) for config in self._scenario_catalog()]
+        return sorted(scenario_results, key=lambda item: item.drawdown_impact)
+
+    def get_portfolio_correlation_matrix(self) -> CorrelationMatrixResponse:
+        rows = self._position_rows(refresh_market_data=True)
+        payload = quant_insights_service.compute_correlation_matrix(rows)
+        return CorrelationMatrixResponse(**payload)
 
     def get_signal(self, symbol: str) -> SignalResponse:
         position = next((row for row in self._position_rows(refresh_market_data=True) if row.symbol == symbol), None)
         payload = quant_insights_service.compute_signal(
             symbol=symbol,
             current_price=position.market_price if position else None,
+            market_data_symbol=position.market_data_symbol if position else None,
+            market_data_enabled=position.market_data_enabled if position else True,
         )
         return SignalResponse(**payload)
 
@@ -489,6 +609,8 @@ class PlatformService:
         payload = quant_insights_service.compute_forecast(
             symbol=symbol,
             current_price=position.market_price if position else None,
+            market_data_symbol=position.market_data_symbol if position else None,
+            market_data_enabled=position.market_data_enabled if position else True,
         )
         return ForecastResponse(**payload)
 
@@ -508,6 +630,39 @@ class PlatformService:
 
     def get_sector_rotation(self) -> list[SectorRotation]:
         return [SectorRotation(**item) for item in quant_insights_service.build_sector_rotation()]
+
+    def get_terminal_snapshot(self) -> TerminalSnapshotResponse:
+        overview = self.get_portfolio_overview(refresh_market_data=False)
+        performance = self.get_portfolio_performance()
+        risk = self.get_portfolio_risk()
+        regime = self.get_regime()
+        history = self.get_portfolio_history(limit=30)
+        rows = self._position_rows(refresh_market_data=False)
+        signals, forecasts = self._terminal_opportunity_tape(rows, regime.regime)
+        research, factors, sectors = self._terminal_research_bundle(rows)
+
+        return TerminalSnapshotResponse(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            portfolio=overview,
+            performance=performance,
+            risk=risk,
+            regime=regime,
+            history=history,
+            signals=signals,
+            forecasts=forecasts,
+            scenarios=self.list_scenarios(),
+            barbell=self.get_barbell_allocation(),
+            correlation_matrix=self.get_portfolio_correlation_matrix(),
+            position_risk=self.get_position_risk(),
+            orders=self.list_orders(),
+            fills=self.list_fills(),
+            research=research,
+            factors=factors,
+            sectors=sectors,
+            users=self.list_admin_users(),
+            audit_logs=self.list_audit_logs(limit=25),
+            event_summary=self.summarize_domain_events(),
+        )
 
     def list_admin_users(self) -> list[AdminUser]:
         users = (
@@ -532,6 +687,86 @@ class PlatformService:
             )
             for user in users
         ]
+
+    def list_admin_symbols(self, unresolved_only: bool = False, limit: int = 100) -> list[AdminSymbolEntry]:
+        rows = (
+            self.db.execute(
+                select(
+                    Symbol,
+                    func.count(Position.id).label("position_count"),
+                    func.coalesce(func.sum(Position.market_value), 0).label("total_market_value"),
+                    func.max(Position.market_price).label("last_price"),
+                )
+                .outerjoin(Position, Position.symbol_id == Symbol.id)
+                .group_by(Symbol.id)
+                .order_by(
+                    func.coalesce(func.sum(Position.market_value), 0).desc(),
+                    Symbol.ticker.asc(),
+                )
+                .limit(limit)
+            )
+            .all()
+        )
+
+        entries = [
+            AdminSymbolEntry(
+                id=symbol.id,
+                ticker=symbol.ticker,
+                asset_class=symbol.asset_class,
+                exchange=symbol.exchange,
+                currency=symbol.currency,
+                market_data_ticker=self._effective_market_data_ticker(symbol),
+                market_data_enabled=bool(symbol.market_data_enabled),
+                position_count=int(position_count or 0),
+                total_market_value=float(total_market_value or 0.0),
+                last_price=float(last_price) if last_price is not None else None,
+            )
+            for symbol, position_count, total_market_value, last_price in rows
+        ]
+        if unresolved_only:
+            return [
+                entry
+                for entry in entries
+                if not entry.market_data_enabled
+            ]
+        return entries
+
+    def update_symbol_market_data(
+        self,
+        symbol_id: str,
+        payload: AdminSymbolMarketDataUpdate,
+    ) -> AdminSymbolEntry:
+        symbol = self.db.get(Symbol, symbol_id)
+        if not symbol:
+            raise ValueError("Symbol not found")
+
+        symbol.market_data_enabled = payload.market_data_enabled
+        normalized_market_ticker = payload.market_data_ticker.strip().upper() if payload.market_data_ticker else None
+        symbol.market_data_ticker = normalized_market_ticker if payload.market_data_enabled else None
+        if payload.market_data_enabled and not symbol.market_data_ticker:
+            symbol.market_data_ticker = symbol.ticker
+
+        self.db.commit()
+        self.db.refresh(symbol)
+
+        position_count = self.db.scalar(select(func.count(Position.id)).where(Position.symbol_id == symbol.id)) or 0
+        total_market_value = (
+            self.db.scalar(select(func.coalesce(func.sum(Position.market_value), 0)).where(Position.symbol_id == symbol.id))
+            or 0
+        )
+        last_price = self.db.scalar(select(func.max(Position.market_price)).where(Position.symbol_id == symbol.id))
+        return AdminSymbolEntry(
+            id=symbol.id,
+            ticker=symbol.ticker,
+            asset_class=symbol.asset_class,
+            exchange=symbol.exchange,
+            currency=symbol.currency,
+            market_data_ticker=self._effective_market_data_ticker(symbol),
+            market_data_enabled=bool(symbol.market_data_enabled),
+            position_count=int(position_count),
+            total_market_value=float(total_market_value or 0.0),
+            last_price=float(last_price) if last_price is not None else None,
+        )
 
     def list_audit_logs(self, limit: int = 25) -> list[AuditLogEntry]:
         logs = self.db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)).all()
@@ -573,7 +808,16 @@ class PlatformService:
 
     def _position_rows(self, refresh_market_data: bool = True) -> list[PositionView]:
         positions = self._position_entities(refresh_market_data=refresh_market_data)
-        snapshot = quant_insights_service.get_live_market_snapshot([position.symbol.ticker for position in positions])
+        snapshot = (
+            quant_insights_service.get_live_market_snapshot_for_requests(
+                {
+                    position.symbol.ticker: self._market_data_symbol(position.symbol)
+                    for position in positions
+                }
+            )
+            if refresh_market_data
+            else {}
+        )
         rows = [
             PositionView(
                 symbol=position.symbol.ticker,
@@ -584,6 +828,8 @@ class PlatformService:
                 daily_pnl=self._daily_pnl_from_snapshot(position, snapshot),
                 unrealized_pnl=float(position.unrealized_pnl or 0),
                 currency=position.symbol.currency,
+                market_data_enabled=bool(position.symbol.market_data_enabled),
+                market_data_symbol=self._market_data_symbol(position.symbol),
             )
             for position in positions
         ]
@@ -607,6 +853,390 @@ class PlatformService:
             daily_pnl=row.daily_pnl,
             unrealized_pnl=row.unrealized_pnl,
             currency=row.currency,
+        )
+
+    def _build_barbell_candidates(
+        self,
+        rows: list[PositionView],
+        current_weights: dict[str, float],
+    ) -> list[BarbellCandidate]:
+        universe = {item["symbol"]: item for item in self._barbell_universe_catalog()}
+        live_symbols = {row.symbol for row in rows}
+
+        for row in rows:
+            universe.setdefault(
+                row.symbol,
+                {
+                    "symbol": row.symbol,
+                    "bucket": self._infer_barbell_bucket(row.symbol),
+                    "role": "existing_holding",
+                    "rationale": f"Existing portfolio exposure kept in the barbell universe for {row.symbol}.",
+                    "buy_probability": 0.58,
+                    "expected_return": 0.05,
+                    "confidence_score": 0.62,
+                    "quality_score": 0.60,
+                    "volatility_score": 0.55,
+                    "liquidity_score": 0.70,
+                },
+            )
+
+        candidates: list[BarbellCandidate] = []
+        for symbol, descriptor in universe.items():
+            buy_probability = float(descriptor["buy_probability"])
+            expected_return = float(descriptor["expected_return"])
+            confidence_score = float(descriptor["confidence_score"])
+            quality_score = float(descriptor["quality_score"])
+            volatility_score = float(descriptor["volatility_score"])
+            liquidity_score = float(descriptor["liquidity_score"])
+
+            if symbol in live_symbols:
+                try:
+                    row = next((item for item in rows if item.symbol == symbol), None)
+                    if row and row.market_data_enabled and row.market_data_symbol:
+                        signal = quant_insights_service.compute_signal(
+                            symbol=symbol,
+                            current_price=row.market_price,
+                            market_data_symbol=row.market_data_symbol,
+                            market_data_enabled=row.market_data_enabled,
+                        )
+                        forecast = quant_insights_service.compute_forecast(
+                            symbol=symbol,
+                            current_price=row.market_price,
+                            market_data_symbol=row.market_data_symbol,
+                            market_data_enabled=row.market_data_enabled,
+                        )
+                        factor_metrics = quant_insights_service._factor_metrics(
+                            symbol,
+                            market_data_symbol=row.market_data_symbol,
+                            market_data_enabled=row.market_data_enabled,
+                        )
+                        liquidity_score = float(
+                            quant_insights_service._liquidity_score(
+                                symbol,
+                                market_data_symbol=row.market_data_symbol,
+                                market_data_enabled=row.market_data_enabled,
+                            )
+                        )
+                        buy_probability = float(signal["buy_probability"])
+                        expected_return = float(forecast["expected_return"])
+                        confidence_score = float(signal["confidence_score"])
+                        quality_score = float(factor_metrics["quality_score"])
+                        volatility_score = float(factor_metrics["volatility_score"])
+                except Exception:
+                    logger.debug("Falling back to static barbell profile for %s", symbol, exc_info=True)
+
+            candidates.append(
+                BarbellCandidate(
+                    symbol=symbol,
+                    bucket=str(descriptor["bucket"]),
+                    role=str(descriptor["role"]),
+                    current_weight=float(current_weights.get(symbol, 0.0)),
+                    buy_probability=buy_probability,
+                    expected_return=expected_return,
+                    confidence_score=confidence_score,
+                    quality_score=quality_score,
+                    volatility_score=volatility_score,
+                    liquidity_score=liquidity_score,
+                    rationale=str(descriptor["rationale"]),
+                )
+            )
+        return candidates
+
+    def _terminal_research_bundle(
+        self,
+        rows: list[PositionView],
+    ) -> tuple[list[ResearchIdea], list[FactorRank], list[SectorRotation]]:
+        current_weights = self._current_weights()
+        candidates = self._build_barbell_candidates(rows, current_weights)
+        sector_map = self._symbol_sector_map()
+        price_map = {row.symbol: row.market_price for row in rows}
+
+        screener: list[ResearchIdea] = []
+        factors: list[FactorRank] = []
+        grouped: dict[str, list[ResearchIdea]] = {}
+
+        for candidate in candidates:
+            sector = sector_map.get(candidate.symbol, "diversified").replace("_", " ").title()
+            momentum_score = max(
+                0.05,
+                min(candidate.buy_probability * 0.65 + max(candidate.expected_return, 0.0) * 2.0, 0.95),
+            )
+            overall_score = (
+                momentum_score * 0.45
+                + candidate.quality_score * 0.35
+                + candidate.volatility_score * 0.20
+            )
+            idea = ResearchIdea(
+                symbol=candidate.symbol,
+                sector=sector,
+                price=round(float(price_map.get(candidate.symbol, 100.0)), 2),
+                buy_probability=round(candidate.buy_probability, 4),
+                expected_return=round(candidate.expected_return, 4),
+                confidence_score=round(candidate.confidence_score, 4),
+                factor_score=round(overall_score, 4),
+                market_regime="risk_on" if candidate.bucket == "opportunistic" else "defensive",
+            )
+            screener.append(idea)
+            grouped.setdefault(sector, []).append(idea)
+            factors.append(
+                FactorRank(
+                    symbol=candidate.symbol,
+                    sector=sector,
+                    momentum_score=round(momentum_score, 4),
+                    quality_score=round(candidate.quality_score, 4),
+                    volatility_score=round(candidate.volatility_score, 4),
+                    overall_score=round(overall_score, 4),
+                )
+            )
+
+        screener = sorted(
+            screener,
+            key=lambda item: (item.buy_probability * 0.45 + item.expected_return * 2.2 + item.factor_score * 0.35),
+            reverse=True,
+        )[:8]
+        factors = sorted(factors, key=lambda item: item.overall_score, reverse=True)[:8]
+
+        sectors: list[SectorRotation] = []
+        for sector, items in grouped.items():
+            avg_buy = float(np.mean([item.buy_probability for item in items]))
+            avg_return = float(np.mean([item.expected_return for item in items]))
+            avg_factor = float(np.mean([item.factor_score for item in items]))
+            score = avg_buy * 0.45 + avg_return * 2.2 + avg_factor * 0.35
+            if score >= 0.62:
+                stance = "overweight"
+            elif score <= 0.48:
+                stance = "underweight"
+            else:
+                stance = "market_weight"
+            sectors.append(
+                SectorRotation(
+                    sector=sector,
+                    average_buy_probability=round(avg_buy, 4),
+                    average_expected_return=round(avg_return, 4),
+                    average_factor_score=round(avg_factor, 4),
+                    stance=stance,
+                )
+            )
+        sectors = sorted(sectors, key=lambda item: item.average_factor_score, reverse=True)
+
+        return screener, factors, sectors
+
+    def _terminal_opportunity_tape(
+        self,
+        rows: list[PositionView],
+        regime_label: str,
+    ) -> tuple[list[SignalResponse], list[ForecastResponse]]:
+        current_weights = self._current_weights()
+        candidates = self._build_barbell_candidates(rows, current_weights)
+        price_map = {row.symbol: row.market_price for row in rows}
+        selected = sorted(
+            candidates,
+            key=lambda candidate: (
+                candidate.buy_probability * 0.50
+                + candidate.expected_return * 2.20
+                + candidate.confidence_score * 0.30
+            ),
+            reverse=True,
+        )[:4]
+
+        signals: list[SignalResponse] = []
+        forecasts: list[ForecastResponse] = []
+        for candidate in selected:
+            reference_price = float(price_map.get(candidate.symbol, 100.0))
+            band = max(0.04, min(candidate.volatility_score * 0.08, 0.12))
+            signals.append(
+                SignalResponse(
+                    symbol=candidate.symbol,
+                    buy_probability=round(candidate.buy_probability, 4),
+                    sell_probability=round(max(0.0, 1 - candidate.buy_probability), 4),
+                    volatility_forecast=round(max(0.10, min(0.65, 1 - candidate.volatility_score)), 4),
+                    confidence_score=round(candidate.confidence_score, 4),
+                    market_regime=regime_label,
+                )
+            )
+            forecasts.append(
+                ForecastResponse(
+                    symbol=candidate.symbol,
+                    price_target=round(reference_price * (1 + candidate.expected_return), 2),
+                    expected_return=round(candidate.expected_return, 4),
+                    confidence_interval_low=round(reference_price * (1 + candidate.expected_return - band), 2),
+                    confidence_interval_high=round(reference_price * (1 + candidate.expected_return + band), 2),
+                )
+            )
+        return signals, forecasts
+
+    @staticmethod
+    def _barbell_universe_catalog() -> list[dict[str, str]]:
+        return [
+            {
+                "symbol": "SGOV",
+                "bucket": "defensive",
+                "role": "cash_surrogate",
+                "rationale": "Ultra short-duration Treasuries stabilize the book and preserve optionality.",
+                "buy_probability": 0.56,
+                "expected_return": 0.02,
+                "confidence_score": 0.78,
+                "quality_score": 0.88,
+                "volatility_score": 0.94,
+                "liquidity_score": 0.93,
+            },
+            {
+                "symbol": "TLT",
+                "bucket": "defensive",
+                "role": "duration_hedge",
+                "rationale": "Long-duration Treasuries hedge growth and liquidity shocks.",
+                "buy_probability": 0.53,
+                "expected_return": 0.03,
+                "confidence_score": 0.70,
+                "quality_score": 0.76,
+                "volatility_score": 0.75,
+                "liquidity_score": 0.89,
+            },
+            {
+                "symbol": "GLD",
+                "bucket": "defensive",
+                "role": "real_asset_hedge",
+                "rationale": "Gold diversifies inflation, policy, and confidence shocks.",
+                "buy_probability": 0.55,
+                "expected_return": 0.04,
+                "confidence_score": 0.72,
+                "quality_score": 0.72,
+                "volatility_score": 0.70,
+                "liquidity_score": 0.88,
+            },
+            {
+                "symbol": "LLY",
+                "bucket": "defensive",
+                "role": "quality_defensive_equity",
+                "rationale": "Healthcare quality anchors the defensive side with resilient earnings.",
+                "buy_probability": 0.61,
+                "expected_return": 0.07,
+                "confidence_score": 0.75,
+                "quality_score": 0.84,
+                "volatility_score": 0.74,
+                "liquidity_score": 0.82,
+            },
+            {
+                "symbol": "XOM",
+                "bucket": "defensive",
+                "role": "inflation_hedge",
+                "rationale": "Energy exposure offsets inflation and commodity-driven stress regimes.",
+                "buy_probability": 0.58,
+                "expected_return": 0.06,
+                "confidence_score": 0.68,
+                "quality_score": 0.73,
+                "volatility_score": 0.62,
+                "liquidity_score": 0.86,
+            },
+            {
+                "symbol": "JPM",
+                "bucket": "defensive",
+                "role": "quality_financial",
+                "rationale": "A capitalized financial franchise adds carry without pure duration risk.",
+                "buy_probability": 0.57,
+                "expected_return": 0.05,
+                "confidence_score": 0.67,
+                "quality_score": 0.74,
+                "volatility_score": 0.68,
+                "liquidity_score": 0.84,
+            },
+            {
+                "symbol": "MSFT",
+                "bucket": "opportunistic",
+                "role": "compounder",
+                "rationale": "High-quality platform compounding on the upside sleeve.",
+                "buy_probability": 0.67,
+                "expected_return": 0.09,
+                "confidence_score": 0.80,
+                "quality_score": 0.89,
+                "volatility_score": 0.69,
+                "liquidity_score": 0.92,
+            },
+            {
+                "symbol": "AAPL",
+                "bucket": "opportunistic",
+                "role": "franchise_growth",
+                "rationale": "Mega-cap ecosystem exposure retains growth optionality with liquidity.",
+                "buy_probability": 0.62,
+                "expected_return": 0.07,
+                "confidence_score": 0.76,
+                "quality_score": 0.86,
+                "volatility_score": 0.72,
+                "liquidity_score": 0.91,
+            },
+            {
+                "symbol": "NVDA",
+                "bucket": "opportunistic",
+                "role": "high_beta_growth",
+                "rationale": "AI and semiconductor beta sit on the convex upside side of the barbell.",
+                "buy_probability": 0.71,
+                "expected_return": 0.14,
+                "confidence_score": 0.82,
+                "quality_score": 0.84,
+                "volatility_score": 0.58,
+                "liquidity_score": 0.90,
+            },
+            {
+                "symbol": "AMZN",
+                "bucket": "opportunistic",
+                "role": "consumer_cloud_growth",
+                "rationale": "Cloud and consumer platform exposure offer asymmetric upside participation.",
+                "buy_probability": 0.64,
+                "expected_return": 0.08,
+                "confidence_score": 0.74,
+                "quality_score": 0.75,
+                "volatility_score": 0.64,
+                "liquidity_score": 0.88,
+            },
+            {
+                "symbol": "META",
+                "bucket": "opportunistic",
+                "role": "advertising_ai_growth",
+                "rationale": "Advertising cash flow funds upside exposure to AI and platform re-rating.",
+                "buy_probability": 0.63,
+                "expected_return": 0.08,
+                "confidence_score": 0.73,
+                "quality_score": 0.72,
+                "volatility_score": 0.61,
+                "liquidity_score": 0.87,
+            },
+            {
+                "symbol": "QQQ",
+                "bucket": "opportunistic",
+                "role": "liquid_growth_beta",
+                "rationale": "Liquid technology beta keeps the upside sleeve deployable at scale.",
+                "buy_probability": 0.60,
+                "expected_return": 0.06,
+                "confidence_score": 0.70,
+                "quality_score": 0.69,
+                "volatility_score": 0.67,
+                "liquidity_score": 0.94,
+            },
+        ]
+
+    def _infer_barbell_bucket(self, symbol: str) -> str:
+        sector = self._symbol_sector_map().get(symbol.upper(), "default")
+        if sector in {"technology", "semiconductors", "communication", "consumer"}:
+            return "opportunistic"
+        return "defensive"
+
+    @staticmethod
+    def _barbell_rationale(
+        *,
+        regime: str,
+        confidence: float,
+        target_buckets: dict[str, float],
+    ) -> str:
+        if regime == "risk_on":
+            posture = "tilts capital toward convex upside while preserving a shock absorber"
+        elif regime in {"risk_off", "defensive"}:
+            posture = "leans on ballast and liquidity before redeploying into selective upside"
+        else:
+            posture = "keeps capital balanced between resilience and selective growth"
+        return (
+            f"Barbell posture is {posture}; regime={regime}, confidence={confidence:.0%}, "
+            f"defensive={target_buckets['defensive']:.0%}, opportunistic={target_buckets['opportunistic']:.0%}, "
+            f"cash={target_buckets['cash']:.0%}."
         )
 
     def _order_schema(self, order: Order, symbol: str, broker_name: str) -> OrderResponse:
@@ -727,7 +1357,14 @@ class PlatformService:
         symbol = self.db.scalar(select(Symbol).where(Symbol.ticker == ticker))
         if symbol:
             return symbol
-        symbol = Symbol(ticker=ticker, asset_class="equity", exchange="SMART", currency="USD")
+        symbol = Symbol(
+            ticker=ticker,
+            asset_class="equity",
+            exchange="SMART",
+            market_data_ticker=ticker,
+            market_data_enabled=True,
+            currency="USD",
+        )
         self.db.add(symbol)
         self.db.flush()
         return symbol
@@ -743,8 +1380,12 @@ class PlatformService:
         if not force and not self._positions_stale(positions):
             return []
 
-        symbols = [position.symbol.ticker for position in positions]
-        snapshot = quant_insights_service.get_live_market_snapshot(symbols)
+        snapshot = quant_insights_service.get_live_market_snapshot_for_requests(
+            {
+                position.symbol.ticker: self._market_data_symbol(position.symbol)
+                for position in positions
+            }
+        )
         updated_count = 0
 
         for position in positions:
@@ -850,20 +1491,35 @@ class PlatformService:
             self.db.commit()
 
     def _publish_domain_event(self, event: DomainEvent) -> None:
-        self.db.add(
-            EventOutbox(
-                event_name=event.event_name,
-                topic=event.topic,
-                event_version=event.event_version,
-                tenant_id=event.tenant_id,
-                correlation_id=event.correlation_id,
-                aggregate_type=event.aggregate_type,
-                aggregate_id=event.aggregate_id,
-                payload=event.payload,
-                delivery_status="pending",
-            )
+        outbox_entry = EventOutbox(
+            event_name=event.event_name,
+            topic=event.topic,
+            event_version=event.event_version,
+            tenant_id=event.tenant_id,
+            correlation_id=event.correlation_id,
+            aggregate_type=event.aggregate_type,
+            aggregate_id=event.aggregate_id,
+            payload=event.payload,
+            delivery_status="pending",
         )
-        event_bus.publish(event)
+        try:
+            with self.db.begin_nested():
+                self.db.add(outbox_entry)
+                self.db.flush()
+        except SQLAlchemyError as exc:
+            if not settings.outbox_fail_open:
+                raise
+            logger.warning(
+                "Outbox persistence skipped for %s due to schema/runtime mismatch: %s",
+                event.event_name,
+                exc,
+            )
+            return
+
+        try:
+            event_bus.publish(event)
+        except Exception as exc:  # pragma: no cover - local handlers are optional
+            logger.warning("In-process event bus handler failed for %s: %s", event.event_name, exc)
 
     @staticmethod
     def _daily_pnl_from_snapshot(
@@ -876,3 +1532,230 @@ class PlatformService:
         if latest_price is None or previous_close is None:
             return 0.0
         return round((float(latest_price) - float(previous_close)) * float(position.quantity), 2)
+
+    @staticmethod
+    def _market_data_symbol(symbol: Symbol) -> str | None:
+        if not symbol.market_data_enabled:
+            return None
+        return symbol.market_data_ticker or symbol.ticker
+
+    @staticmethod
+    def _effective_market_data_ticker(symbol: Symbol) -> str | None:
+        if not symbol.market_data_enabled:
+            return None
+        return symbol.market_data_ticker or symbol.ticker
+
+    @staticmethod
+    def _symbol_sector_map() -> dict[str, str]:
+        return {
+            "AAPL": "technology",
+            "MSFT": "technology",
+            "NVDA": "semiconductors",
+            "AMZN": "consumer",
+            "META": "communication",
+            "JPM": "financials",
+            "XOM": "energy",
+            "LLY": "healthcare",
+            "SGOV": "bonds",
+            "TLT": "bonds",
+            "GLD": "commodities",
+            "QQQ": "technology",
+        }
+
+    @staticmethod
+    def _scenario_catalog() -> list[dict[str, object]]:
+        return [
+            {
+                "scenario_id": "1929",
+                "name": "Great Depression",
+                "period": "1929-1932",
+                "trigger": "Credit bubble unwind, bank failures, and forced deleveraging.",
+                "summary": "Extreme equity collapse with severe liquidity contraction and deflationary pressure.",
+                "macro_context": {
+                    "Inflation": "-2.1%",
+                    "Unemployment": "24.9%",
+                    "Policy rate": "0.6%",
+                    "Long bond yield": "2.8%",
+                },
+                "default_shock": -0.44,
+                "cash_buffer_shock": 0.0,
+                "sector_shocks": {"technology": -0.49, "financials": -0.58, "energy": -0.31},
+                "shock_factors": [("Equities", -0.44), ("Liquidity", -0.18), ("Deflation", -0.07)],
+            },
+            {
+                "scenario_id": "1973_oil",
+                "name": "Oil Shock",
+                "period": "1973-1974",
+                "trigger": "Oil embargo, inflation shock, and recessionary repricing.",
+                "summary": "Energy dislocation, margin compression, and growth multiple reset.",
+                "macro_context": {
+                    "Inflation": "8.7%",
+                    "Unemployment": "4.9%",
+                    "Policy rate": "10.8%",
+                    "Oil price change": "+70%",
+                },
+                "default_shock": -0.22,
+                "cash_buffer_shock": 0.0,
+                "sector_shocks": {"technology": -0.25, "energy": 0.08, "financials": -0.16},
+                "shock_factors": [("Oil", 0.70), ("Rates", 0.03), ("Equities", -0.22)],
+            },
+            {
+                "scenario_id": "1989",
+                "name": "1989 Leverage Crack",
+                "period": "1989-1990",
+                "trigger": "Leverage unwind, property stress, and global growth slowdown.",
+                "summary": "Crowded quality-growth names derate while liquidity thins across cyclicals.",
+                "macro_context": {
+                    "Inflation": "4.8%",
+                    "Unemployment": "5.3%",
+                    "Policy rate": "8.1%",
+                    "10Y yield": "8.5%",
+                },
+                "default_shock": -0.16,
+                "cash_buffer_shock": 0.0,
+                "sector_shocks": {"technology": -0.18, "financials": -0.19, "energy": -0.12},
+                "shock_factors": [("Equities", -0.16), ("Credit", -0.05), ("Property", -0.08)],
+            },
+            {
+                "scenario_id": "2000_tech",
+                "name": "Tech Bubble Burst",
+                "period": "2000-2002",
+                "trigger": "Multiple compression in high-duration growth and speculative tech.",
+                "summary": "Technology leaders face severe repricing while cash becomes the portfolio stabilizer.",
+                "macro_context": {
+                    "Inflation": "3.4%",
+                    "Unemployment": "4.0%",
+                    "Policy rate": "6.5%",
+                    "Nasdaq drawdown": "-78%",
+                },
+                "default_shock": -0.20,
+                "cash_buffer_shock": 0.0,
+                "sector_shocks": {"technology": -0.34, "semiconductors": -0.39, "communication": -0.26},
+                "shock_factors": [("Growth", -0.34), ("Volatility", 0.38), ("Funding", -0.06)],
+            },
+            {
+                "scenario_id": "2008",
+                "name": "Global Financial Crisis",
+                "period": "2008-2009",
+                "trigger": "Housing/credit collapse and systemic bank deleveraging.",
+                "summary": "Broad equity drawdown, credit widening, and elevated volatility hit risky assets simultaneously.",
+                "macro_context": {
+                    "Inflation": "3.8%",
+                    "Unemployment": "7.3%",
+                    "Policy rate": "2.0%",
+                    "Credit spread": "+300bps",
+                },
+                "default_shock": -0.24,
+                "cash_buffer_shock": 0.0,
+                "sector_shocks": {"technology": -0.21, "financials": -0.38, "energy": -0.28},
+                "shock_factors": [("Equities", -0.24), ("Credit Spread", 0.03), ("Volatility", 0.45)],
+            },
+            {
+                "scenario_id": "2020_pandemic",
+                "name": "Pandemic Shock",
+                "period": "2020 Q1-Q2",
+                "trigger": "Global shutdowns, mobility collapse, and liquidity scramble.",
+                "summary": "Fast drawdown with violent policy response and factor dispersion across the book.",
+                "macro_context": {
+                    "Inflation": "1.2%",
+                    "Unemployment": "14.7%",
+                    "Policy rate": "0.25%",
+                    "GDP shock": "-31.4% annualized",
+                },
+                "default_shock": -0.13,
+                "cash_buffer_shock": 0.0,
+                "sector_shocks": {"technology": -0.09, "energy": -0.31, "financials": -0.17},
+                "shock_factors": [("Equities", -0.13), ("Rates", -0.015), ("USD", 0.06)],
+            },
+            {
+                "scenario_id": "2022_inflation",
+                "name": "Inflation and Rates Shock",
+                "period": "2022",
+                "trigger": "Sticky inflation, aggressive central-bank hikes, and valuation reset.",
+                "summary": "Duration-sensitive equities and growth franchises compress while energy and cash partly cushion.",
+                "macro_context": {
+                    "Inflation": "8.0%",
+                    "Unemployment": "3.6%",
+                    "Policy rate": "4.5%",
+                    "10Y yield": "4.2%",
+                },
+                "default_shock": -0.14,
+                "cash_buffer_shock": 0.0,
+                "sector_shocks": {"technology": -0.21, "energy": 0.12, "financials": -0.09},
+                "shock_factors": [("Rates", 0.02), ("Inflation", 0.08), ("Growth", -0.12)],
+            },
+        ]
+
+    def _build_scenario_result(
+        self,
+        config: dict[str, object],
+        overview: PortfolioOverview,
+        rows: list[PositionView],
+    ) -> ScenarioResult:
+        default_shock = float(config["default_shock"])
+        cash_buffer_shock = float(config.get("cash_buffer_shock", 0.0))
+        sector_shocks = dict(config.get("sector_shocks", {}))
+        macro_context = [
+            ScenarioMacroMetric(label=label, value=value)
+            for label, value in dict(config.get("macro_context", {})).items()
+        ]
+
+        pnl_total = 0.0
+        portfolio_impacts: list[ScenarioImpactItem] = []
+        shocks: list[ScenarioShock] = []
+
+        for factor_name, shock_value in list(config.get("shock_factors", [])):
+            shocks.append(
+                ScenarioShock(
+                    factor=factor_name,
+                    shock=float(shock_value),
+                    contribution=0.0,
+                )
+            )
+
+        for row in rows:
+            sector = self._symbol_sector_map().get(row.symbol.upper(), "default")
+            position_shock = float(sector_shocks.get(sector, default_shock))
+            pnl_impact = round(row.market_value * position_shock, 2)
+            pnl_total += pnl_impact
+            portfolio_impacts.append(
+                ScenarioImpactItem(
+                    bucket=row.symbol,
+                    pnl_impact=pnl_impact,
+                    comment=f"{sector.replace('_', ' ').title()} bucket repriced by {position_shock:.0%}.",
+                )
+            )
+
+        cash_impact = round(overview.cash * cash_buffer_shock, 2)
+        if overview.cash:
+            portfolio_impacts.append(
+                ScenarioImpactItem(
+                    bucket="Cash Buffer",
+                    pnl_impact=cash_impact,
+                    comment="Cash acts as a liquidity reserve and partial shock absorber.",
+                )
+            )
+            pnl_total += cash_impact
+
+        if shocks and pnl_total != 0:
+            equal_contribution = round(pnl_total / len(shocks), 2)
+            shocks = [
+                ScenarioShock(factor=shock.factor, shock=shock.shock, contribution=equal_contribution)
+                for shock in shocks
+            ]
+
+        nav = max(overview.nav, 1.0)
+        drawdown_impact = round(pnl_total / nav, 4)
+
+        return ScenarioResult(
+            scenario_id=str(config["scenario_id"]),
+            name=str(config["name"]),
+            period=str(config.get("period") or ""),
+            trigger=str(config.get("trigger") or ""),
+            summary=str(config.get("summary") or ""),
+            estimated_pnl_impact=round(pnl_total, 2),
+            drawdown_impact=drawdown_impact,
+            macro_context=macro_context,
+            portfolio_impacts=portfolio_impacts,
+            shocks=shocks,
+        )

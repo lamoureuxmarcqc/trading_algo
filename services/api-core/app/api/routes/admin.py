@@ -1,8 +1,10 @@
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
 from app.api.deps import get_platform_service
 from app.events.dispatcher import outbox_dispatcher
 from app.schemas.admin import (
+    AdminSymbolEntry,
+    AdminSymbolMarketDataUpdate,
     AdminUser,
     AuditLogEntry,
     DomainEventDispatchResponse,
@@ -40,6 +42,27 @@ def get_domain_event_summary(
     platform_service: PlatformService = Depends(get_platform_service),
 ) -> DomainEventSummary:
     return platform_service.summarize_domain_events()
+
+
+@router.get("/symbols", response_model=list[AdminSymbolEntry])
+def list_symbols(
+    unresolved_only: bool = False,
+    limit: int = 100,
+    platform_service: PlatformService = Depends(get_platform_service),
+) -> list[AdminSymbolEntry]:
+    return platform_service.list_admin_symbols(unresolved_only=unresolved_only, limit=limit)
+
+
+@router.patch("/symbols/{symbol_id}", response_model=AdminSymbolEntry)
+def update_symbol_market_data(
+    symbol_id: str,
+    payload: AdminSymbolMarketDataUpdate,
+    platform_service: PlatformService = Depends(get_platform_service),
+) -> AdminSymbolEntry:
+    try:
+        return platform_service.update_symbol_market_data(symbol_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("/events/dispatch", response_model=DomainEventDispatchResponse)

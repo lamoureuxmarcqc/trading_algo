@@ -50,3 +50,21 @@ class DomainEventSummary(BaseModel):
     pending: int
     failed: int
     delivered: int
+
+
+class AdminSymbolEntry(BaseModel):
+    id: str
+    ticker: str
+    asset_class: str
+    exchange: str | None = None
+    currency: str
+    market_data_ticker: str | None = None
+    market_data_enabled: bool
+    position_count: int
+    total_market_value: float
+    last_price: float | None = None
+
+
+class AdminSymbolMarketDataUpdate(BaseModel):
+    market_data_ticker: str | None = None
+    market_data_enabled: bool

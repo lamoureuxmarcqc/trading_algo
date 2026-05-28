@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS symbols (
     ticker TEXT NOT NULL UNIQUE,
     asset_class TEXT NOT NULL,
     exchange TEXT,
+    market_data_ticker TEXT,
+    market_data_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     currency TEXT NOT NULL DEFAULT 'USD',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -266,6 +268,114 @@ CREATE TABLE IF NOT EXISTS execution_metrics (
     participation_rate NUMERIC(18,6),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE corporate_actions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    symbol_id UUID NOT NULL REFERENCES symbols(id),
+    action_type TEXT NOT NULL, -- 'DIVIDEND', 'STOCK_SPLIT', 'MERGER', 'RIGHTS_OFFERING'
+    ex_date DATE NOT NULL,
+    record_date DATE,
+    payment_date DATE,
+    details JSONB NOT NULL, -- e.g., {"dividend_per_share": 0.5, "currency": "USD"}
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE restrictions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    restriction_type TEXT NOT NULL, -- 'POSITION_LIMIT', 'SECTOR_CAP', 'BLACKLIST'
+    entity_type TEXT NOT NULL, -- 'ACCOUNT', 'USER', 'PORTFOLIO'
+    entity_id UUID NOT NULL,
+    symbol_id UUID REFERENCES symbols(id),
+    max_qty NUMERIC(20,6),
+    max_notional NUMERIC(20,2),
+    effective_from DATE NOT NULL,
+    effective_to DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE watchlists (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    owner_id UUID REFERENCES users(id),
+    is_institutional BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE watchlist_items (
+    watchlist_id UUID REFERENCES watchlists(id) ON DELETE CASCADE,
+    symbol_id UUID REFERENCES symbols(id),
+    added_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (watchlist_id, symbol_id)
+);
+
+CREATE TABLE risk_metrics_daily (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    portfolio_id TEXT NOT NULL, -- e.g., 'family-office-master'
+    metric_date DATE NOT NULL,
+    var_95 NUMERIC(20,4),       -- 1-day VaR at 95%
+    var_99 NUMERIC(20,4),
+    expected_shortfall NUMERIC(20,4),
+    beta_to_spx NUMERIC(10,6),
+    sharpe_ratio NUMERIC(10,6),
+    max_drawdown NUMERIC(10,6),
+    stress_test_label TEXT,      -- e.g., '2008_CRISIS'
+    payload JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE scenario_definitions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    shocks JSONB NOT NULL,       -- e.g., {"EQUITY": -0.30, "RATES": +0.02}
+    created_by UUID REFERENCES users(id),
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE fx_positions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID NOT NULL REFERENCES accounts(id),
+    base_currency TEXT NOT NULL,
+    quote_currency TEXT NOT NULL,
+    forward_rate NUMERIC(18,8),
+    maturity_date DATE,
+    notional NUMERIC(20,2),
+    status TEXT DEFAULT 'OPEN', -- 'OPEN', 'CLOSED', 'EXPIRED'
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE ledger_entries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID NOT NULL REFERENCES accounts(id),
+    transaction_id UUID REFERENCES transactions(id),
+    entry_type TEXT NOT NULL, -- 'TRADE_COST', 'FEE', 'DIVIDEND', 'INTEREST', 'REALIZED_PNL'
+    amount NUMERIC(20,6),
+    currency TEXT NOT NULL,
+    book_date DATE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE benchmark_constituents (
+    benchmark_id UUID NOT NULL REFERENCES benchmarks(id),
+    symbol_id UUID NOT NULL REFERENCES symbols(id),
+    weight NUMERIC(18,8) NOT NULL,
+    effective_from DATE NOT NULL,
+    effective_to DATE,
+    PRIMARY KEY (benchmark_id, symbol_id, effective_from)
+);
+
+CREATE TABLE performance_attribution (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    portfolio_id TEXT NOT NULL,
+    benchmark_id UUID NOT NULL REFERENCES benchmarks(id),
+    as_of_date DATE NOT NULL,
+    allocation_effect NUMERIC(18,8),
+    selection_effect NUMERIC(18,8),
+    interaction_effect NUMERIC(18,8),
+    total_excess_return NUMERIC(18,8),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 
 INSERT INTO roles (name, description)
 VALUES

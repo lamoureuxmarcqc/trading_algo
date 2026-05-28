@@ -266,7 +266,7 @@ class PortfolioDashboard:
     # 2. RAPPORT TECHNIQUE / VISUEL
     # ------------------------------------------------------------------
     def create_visual_report(self) -> go.Figure:
-        """Camembert d'allocation, P&L en barres et performance relative."""
+        """Camembert d'allocation, P&L en barres, performance et matrix de corrélation."""
         if not self.portfolio or not getattr(self.portfolio, 'positions', None):
             return self._create_empty_fig("Aucune position à afficher")
 
@@ -275,18 +275,22 @@ class PortfolioDashboard:
             df_summary = self.portfolio.get_summary(prices) if hasattr(self.portfolio, 'get_summary') else pd.DataFrame()
             alloc = self.portfolio.get_allocation(prices) if hasattr(self.portfolio, 'get_allocation') else {}
 
+            # create a 3-row layout: previous 2x2 plus a full-width heatmap row
             fig = make_subplots(
-                rows=2, cols=2,
+                rows=3, cols=2,
                 specs=[[{"type": "domain"}, {"type": "bar"}],
-                       [{"type": "bar"}, {"type": "scatter"}]],
+                       [{"type": "bar"}, {"type": "scatter"}],
+                       [{"colspan": 2, "type": "heatmap"}, None]],
                 subplot_titles=(
                     "<b>Répartition du Portefeuille</b>",
                     "<b>P&L par Position (%)</b>",
                     "<b>P&L Absolu ($)</b>",
-                    "<b>Performance cumulée (%)</b>"
+                    "<b>Performance cumulée (%)</b>",
+                    "<b>Matrice de Corrélation (rendements)</b>"
                 ),
-                vertical_spacing=0.12,
-                horizontal_spacing=0.12
+                vertical_spacing=0.08,
+                horizontal_spacing=0.08,
+                row_heights=[0.25, 0.35, 0.40]
             )
 
             # Camembert
@@ -341,7 +345,43 @@ class PortfolioDashboard:
                 paper_bgcolor=COLORS["background"],
                 font=dict(color=COLORS["primary"])
             )
-            return fig
+            # ---------- Correlation heatmap ----------
+            corr = {}
+            try:
+                # Prefer manager-provided analysis (already sanitized)
+                analysis = self.manager.analyze_portfolio(include_risk=False) if self.manager else {}
+                corr = analysis.get("correlation_matrix") or {}
+            except Exception:
+                corr = {}
+
+            if corr:
+                # corr is dict[str][str] -> convert to DataFrame for plotting
+                corr_df = pd.DataFrame(corr).astype(float)
+                tickers = corr_df.index.tolist()
+                z = corr_df.values.tolist()
+                heat = go.Heatmap(
+                    z=z,
+                    x=tickers,
+                    y=tickers,
+                    colorscale="RdBu",
+                    zmin=-1,
+                    zmax=1,
+                    colorbar=dict(title="Corr")
+                )
+                fig.add_trace(heat, row=3, col=1)
+                fig.update_xaxes(tickangle=-45, row=3, col=1)
+                fig.update_yaxes(autorange="reversed", row=3, col=1)
+
+            fig.update_layout(
+                template=None, height=1150,
+                title=dict(text="📈 Analyse Technique & Corrélation", font=dict(size=18, color=COLORS["primary"]), x=0.5),
+                showlegend=False,
+                margin=dict(l=60, r=40, t=100, b=60),
+                plot_bgcolor=COLORS["plot_bg"],
+                paper_bgcolor=COLORS["background"],
+                font=dict(color=COLORS["primary"])
+            )
+            return fig            
 
         except Exception as e:
             logger.exception("Erreur create_visual_report")
