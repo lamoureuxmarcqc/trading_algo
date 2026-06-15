@@ -61,6 +61,8 @@ Le terminal web servi directement par FastAPI a aussi ete durci:
 - reduction du fan-out HTTP au chargement
 - exposition native de la posture barbell
 - visibilite immediate sur l'etat de livraison de l'outbox evenementielle
+- surface de controle du snapshot: fraicheur marche, ordres ouverts, alertes risque/outbox
+- filtre global cote client pour explorer rapidement les tableaux et scenarios sans nouvel appel API
 
 ## Risk Intelligence
 

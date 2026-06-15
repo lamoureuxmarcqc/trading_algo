@@ -16,6 +16,10 @@
           <p class="subtitle">
             Portfolio, risk, signals and order entry served directly by the FastAPI core.
           </p>
+          <div class="hero-meta">
+            <span id="hero-snapshot-at">Snapshot pending</span>
+            <span id="hero-market-at">Market data pending</span>
+          </div>
         </div>
         <div class="hero-actions">
           <a class="button secondary" href="/docs">API Docs</a>
@@ -25,6 +29,88 @@
       </header>
 
       <section class="metrics" id="metrics"></section>
+
+      <section class="panel control-panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Control Surface</p>
+            <h2>Snapshot Health</h2>
+          </div>
+          <span id="terminal-filter-count" class="micro">No filter</span>
+        </div>
+        <div class="control-grid">
+          <div>
+            <div class="terminal-search">
+              <input id="terminal-filter" type="search" placeholder="Filter symbols, orders, sectors, users..." />
+              <button id="terminal-filter-clear" class="button secondary" type="button">Clear</button>
+            </div>
+            <div class="metrics control-metrics" id="terminal-health-metrics"></div>
+          </div>
+          <div class="alert-stack" id="terminal-alerts">
+            <div class="alert-card neutral">Waiting for the first snapshot.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Trading Algo</p>
+            <h2>Analysis Console</h2>
+          </div>
+          <span id="algo-summary" class="micro">Idle</span>
+        </div>
+        <form id="algo-form" class="algo-form">
+          <label>
+            Command
+            <select id="algo-command" name="command">
+              <option value="analyze">analyze</option>
+              <option value="compare">compare</option>
+              <option value="screen">screen</option>
+            </select>
+          </label>
+          <label>
+            Symbols
+            <input id="algo-symbols" name="symbols" value="AAPL,MSFT,NVDA" />
+          </label>
+          <label>
+            Period
+            <select id="algo-period" name="period">
+              <option value="6mo">6mo</option>
+              <option value="1y" selected>1y</option>
+              <option value="2y">2y</option>
+              <option value="5y">5y</option>
+            </select>
+          </label>
+          <label>
+            Max
+            <input id="algo-max-symbols" name="max_symbols" type="number" min="1" max="25" value="8" />
+          </label>
+          <button class="button primary" type="submit">Run</button>
+        </form>
+        <div class="table-wrap algo-results">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Trend</th>
+                <th>Rec.</th>
+                <th>Price</th>
+                <th>Day</th>
+                <th>Total</th>
+                <th>Vol 20D</th>
+                <th>Sharpe</th>
+                <th>VaR 95</th>
+                <th>RSI</th>
+              </tr>
+            </thead>
+            <tbody id="algo-table">
+              <tr><td colspan="10" class="empty-state">No trading-algo command has run yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <pre id="algo-result" class="result-box compact">Awaiting trading-algo command.</pre>
+      </section>
 
       <section class="panel">
         <div class="section-head">

@@ -1,14 +1,16 @@
 :root {
   color-scheme: dark;
-  --bg: #081019;
-  --panel: rgba(18, 28, 41, 0.88);
-  --line: rgba(115, 144, 177, 0.18);
+  --bg: #080b0f;
+  --panel: rgba(18, 24, 33, 0.92);
+  --panel-soft: rgba(255, 255, 255, 0.035);
+  --line: rgba(150, 164, 181, 0.22);
   --text: #f7fbff;
-  --muted: #94a8bf;
-  --accent: #7dd3fc;
+  --muted: #9caebf;
+  --accent: #6ee7d8;
   --gain: #2ad18a;
   --loss: #ff7373;
-  --sand: #f1d39a;
+  --warn: #f4bf63;
+  --sand: #e7d08b;
 }
 
 * {
@@ -20,9 +22,10 @@ body {
   font-family: "Segoe UI", "IBM Plex Sans", sans-serif;
   color: var(--text);
   background:
-    radial-gradient(circle at top left, rgba(42, 209, 138, 0.12), transparent 28%),
-    radial-gradient(circle at top right, rgba(125, 211, 252, 0.12), transparent 32%),
-    linear-gradient(180deg, #06080d 0%, #0a1018 52%, #0c1420 100%);
+    linear-gradient(90deg, rgba(110, 231, 216, 0.06) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(110, 231, 216, 0.04) 1px, transparent 1px),
+    linear-gradient(180deg, #07090d 0%, #0a0f15 54%, #0b1017 100%);
+  background-size: 36px 36px, 36px 36px, auto;
 }
 
 .shell {
@@ -34,10 +37,10 @@ body {
 .panel {
   border: 1px solid var(--line);
   background: var(--panel);
-  backdrop-filter: blur(12px);
-  border-radius: 28px;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
-  padding: 24px;
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+  padding: 20px;
 }
 
 .hero {
@@ -58,6 +61,23 @@ body {
   line-height: 1.6;
 }
 
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.hero-meta span {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--panel-soft);
+  padding: 8px 10px;
+  font-family: Consolas, "IBM Plex Mono", monospace;
+  font-size: 12px;
+}
+
 .eyebrow,
 .micro {
   color: var(--muted);
@@ -70,11 +90,13 @@ body {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .badge,
 .button {
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 12px 16px;
   border: 1px solid var(--line);
 }
@@ -104,6 +126,73 @@ body {
 
 .metrics {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.control-panel {
+  margin-top: 16px;
+}
+
+.control-grid {
+  display: grid;
+  grid-template-columns: 1.25fr 0.75fr;
+  gap: 16px;
+}
+
+.control-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.terminal-search {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+.terminal-search input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.26);
+  color: var(--text);
+  padding: 12px 14px;
+  font: inherit;
+}
+
+.terminal-search input::placeholder {
+  color: var(--muted);
+}
+
+.alert-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.alert-card {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel-soft);
+  padding: 12px 14px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.alert-card strong {
+  display: block;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.alert-card.gain {
+  border-left-color: var(--gain);
+}
+
+.alert-card.loss {
+  border-left-color: var(--loss);
+}
+
+.alert-card.warn {
+  border-left-color: var(--warn);
 }
 
 .two-up {
@@ -145,7 +234,7 @@ body {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 6px;
   padding: 6px 10px;
   font-size: 12px;
   text-transform: uppercase;
@@ -175,7 +264,7 @@ body {
 .table-wrap {
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 22px;
+  border-radius: 8px;
 }
 
 table {
@@ -219,7 +308,7 @@ tbody tr:last-child td {
 .history-chart-wrap {
   min-height: 240px;
   border: 1px solid var(--line);
-  border-radius: 22px;
+  border-radius: 8px;
   background: rgba(0, 0, 0, 0.18);
   padding: 14px;
 }
@@ -249,7 +338,7 @@ tbody tr:last-child td {
 
 .risk-card {
   border: 1px solid var(--line);
-  border-radius: 22px;
+  border-radius: 8px;
   padding: 16px;
   background: rgba(0, 0, 0, 0.14);
 }
@@ -265,7 +354,7 @@ tbody tr:last-child td {
   background: transparent;
   color: var(--sand);
   padding: 8px 12px;
-  border-radius: 999px;
+  border-radius: 6px;
   cursor: pointer;
 }
 
@@ -280,6 +369,13 @@ tbody tr:last-child td {
   gap: 12px;
 }
 
+.algo-form {
+  display: grid;
+  grid-template-columns: 0.75fr 1.5fr 0.75fr 0.5fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
 .order-form label {
   display: flex;
   flex-direction: column;
@@ -288,10 +384,20 @@ tbody tr:last-child td {
   font-size: 14px;
 }
 
+.algo-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 .order-form input,
-.order-form select {
+.order-form select,
+.algo-form input,
+.algo-form select {
   width: 100%;
-  border-radius: 14px;
+  border-radius: 6px;
   border: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.22);
   color: var(--text);
@@ -303,20 +409,34 @@ tbody tr:last-child td {
   grid-column: 1 / -1;
 }
 
+.algo-results {
+  margin-top: 16px;
+}
+
 .result-box {
   margin: 16px 0 0;
   min-height: 120px;
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: 8px;
   background: rgba(0, 0, 0, 0.18);
   padding: 16px;
   white-space: pre-wrap;
   color: var(--accent);
 }
 
+.result-box.compact {
+  min-height: 76px;
+}
+
 @media (max-width: 1100px) {
   .metrics,
-  .two-up {
+  .two-up,
+  .control-grid,
+  .algo-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .control-metrics {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -333,7 +453,10 @@ tbody tr:last-child td {
   .hero,
   .metrics,
   .two-up,
-  .order-form {
+  .control-grid,
+  .control-metrics,
+  .order-form,
+  .algo-form {
     grid-template-columns: 1fr;
     display: grid;
   }

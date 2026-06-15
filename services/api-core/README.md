@@ -162,6 +162,11 @@ Le service est actuellement en mode `transitional`: les headers sont supportés 
   - orders, fills, research, users, audit logs
   - outbox event summary
 - Le terminal web FastAPI consomme ce snapshot pour reduire la latence applicative et le bruit reseau.
+- Le terminal affiche aussi une surface de controle locale:
+  - age du snapshot et de la derniere donnee de marche
+  - nombre d'ordres ouverts
+  - alertes outbox, concentration, correlation, VaR et fraicheur de marche
+  - filtre global cote client pour retrouver rapidement symboles, ordres, secteurs et utilisateurs
 
 ## Alembic
 

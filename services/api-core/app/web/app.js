@@ -8,6 +8,42 @@ const fmtCurrency = (value, currency = "USD") =>
 const fmtPercent = (value, digits = 1) => `${((value ?? 0) * 100).toFixed(digits)}%`;
 const fmtTime = (value) => new Date(value).toLocaleString();
 const roleLabel = (value) => String(value ?? "").replaceAll("_", " ");
+const fmtNullable = (value, digits = 2) => (value === null || value === undefined ? "--" : Number(value).toFixed(digits));
+const terminalState = {
+  filter: ""
+};
+
+function fmtAge(value) {
+  if (!value) {
+    return "not timestamped";
+  }
+
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) {
+    return "invalid timestamp";
+  }
+
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.round(minutes / 60);
+  return `${hours}h ago`;
+}
+
+function timestampAgeMinutes(value) {
+  const timestamp = new Date(value).getTime();
+  if (!value || Number.isNaN(timestamp)) {
+    return null;
+  }
+  return Math.max(0, (Date.now() - timestamp) / 60000);
+}
 
 function emptyRow(colspan, label) {
   return `<tr><td colspan="${colspan}" class="empty-state">${label}</td></tr>`;
@@ -15,10 +51,10 @@ function emptyRow(colspan, label) {
 
 function toneChipClass(value) {
   const token = String(value ?? "").toLowerCase();
-  if (["filled", "enabled", "admin", "trader", "risk_on", "overweight", "buy", "delivered"].includes(token)) {
+  if (["filled", "enabled", "admin", "trader", "risk_on", "overweight", "buy", "bullish", "delivered"].includes(token)) {
     return "tone-chip gain";
   }
-  if (["cancelled", "rejected", "underweight", "risk_off", "defensive", "sell", "failed"].includes(token)) {
+  if (["cancelled", "rejected", "underweight", "risk_off", "defensive", "sell", "reduce", "bearish", "failed"].includes(token)) {
     return "tone-chip loss";
   }
   return "tone-chip neutral";
@@ -30,6 +66,120 @@ async function fetchJson(path, options) {
     throw new Error(`Request failed for ${path}: ${response.status}`);
   }
   return response.json();
+}
+
+function renderTerminalControls(snapshot) {
+  const metrics = document.getElementById("terminal-health-metrics");
+  const alerts = document.getElementById("terminal-alerts");
+  const heroSnapshot = document.getElementById("hero-snapshot-at");
+  const heroMarket = document.getElementById("hero-market-at");
+
+  const openOrders = snapshot.orders.filter((order) => !["cancelled", "filled", "rejected"].includes(String(order.status).toLowerCase()));
+  const marketAge = timestampAgeMinutes(snapshot.portfolio.market_data_as_of);
+  const snapshotAge = timestampAgeMinutes(snapshot.generated_at);
+  const riskWatchCount = [
+    snapshot.event_summary.failed > 0,
+    snapshot.event_summary.pending > 0,
+    snapshot.risk.concentration_risk > 0.35,
+    snapshot.risk.correlation_risk > 0.65,
+    snapshot.risk.var_95 < -0.03,
+    marketAge === null || marketAge > 60
+  ].filter(Boolean).length;
+
+  heroSnapshot.textContent = `Snapshot ${fmtAge(snapshot.generated_at)}`;
+  heroMarket.textContent = `Market ${fmtAge(snapshot.portfolio.market_data_as_of)}`;
+
+  metrics.innerHTML = [
+    { title: "Snapshot", value: fmtAge(snapshot.generated_at), delta: fmtTime(snapshot.generated_at), tone: snapshotAge !== null && snapshotAge < 10 ? "gain" : "" },
+    { title: "Market Data", value: fmtAge(snapshot.portfolio.market_data_as_of), delta: snapshot.portfolio.market_data_as_of ? fmtTime(snapshot.portfolio.market_data_as_of) : "No market timestamp", tone: marketAge !== null && marketAge <= 60 ? "gain" : "loss" },
+    { title: "Open Orders", value: String(openOrders.length), delta: `${snapshot.orders.length} total orders`, tone: openOrders.length ? "neutral" : "" },
+    { title: "Risk Watch", value: String(riskWatchCount), delta: "control exceptions", tone: riskWatchCount ? "loss" : "gain" }
+  ]
+    .map(
+      (metric) => `
+        <div class="panel metric-card">
+          <h3>${metric.title}</h3>
+          <div class="metric-value ${metric.tone}">${metric.value}</div>
+          <div class="metric-delta">${metric.delta}</div>
+        </div>
+      `
+    )
+    .join("");
+
+  const alertItems = [];
+  if (snapshot.event_summary.failed > 0) {
+    alertItems.push({
+      tone: "loss",
+      title: "Outbox replay required",
+      body: `${snapshot.event_summary.failed} failed event(s) need investigation before downstream state is trusted.`
+    });
+  }
+  if (snapshot.event_summary.pending > 0) {
+    alertItems.push({
+      tone: "warn",
+      title: "Outbox backlog",
+      body: `${snapshot.event_summary.pending} event(s) are still pending delivery.`
+    });
+  }
+  if (marketAge === null || marketAge > 60) {
+    alertItems.push({
+      tone: "warn",
+      title: "Market data freshness",
+      body: marketAge === null ? "The portfolio snapshot has no market data timestamp." : `Market data is ${fmtAge(snapshot.portfolio.market_data_as_of)}.`
+    });
+  }
+  if (snapshot.risk.concentration_risk > 0.35) {
+    alertItems.push({
+      tone: "warn",
+      title: "Concentration watch",
+      body: `Concentration risk is ${fmtPercent(snapshot.risk.concentration_risk, 1)} across ${snapshot.portfolio.positions.length} position(s).`
+    });
+  }
+  if (snapshot.risk.correlation_risk > 0.65) {
+    alertItems.push({
+      tone: "warn",
+      title: "Correlation watch",
+      body: `Portfolio correlation risk is ${fmtPercent(snapshot.risk.correlation_risk, 1)}.`
+    });
+  }
+  if (snapshot.risk.var_95 < -0.03) {
+    alertItems.push({
+      tone: "loss",
+      title: "VaR threshold",
+      body: `VaR 95 is ${fmtPercent(snapshot.risk.var_95, 2)}.`
+    });
+  }
+  if (!alertItems.length) {
+    alertItems.push({
+      tone: "gain",
+      title: "No active exceptions",
+      body: "Snapshot, market data and event delivery are inside the terminal guardrails."
+    });
+  }
+
+  alerts.innerHTML = alertItems
+    .slice(0, 4)
+    .map((item) => `<div class="alert-card ${item.tone}"><strong>${item.title}</strong>${item.body}</div>`)
+    .join("");
+}
+
+function applyTerminalFilter(query) {
+  terminalState.filter = String(query ?? "").trim().toLowerCase();
+  const rows = [...document.querySelectorAll("tbody tr")].filter((row) => !row.querySelector(".empty-state"));
+  const cards = [...document.querySelectorAll(".risk-card")];
+  const items = [...rows, ...cards];
+
+  let visible = 0;
+  for (const item of items) {
+    const matches = !terminalState.filter || item.textContent.toLowerCase().includes(terminalState.filter);
+    item.hidden = !matches;
+    if (matches) {
+      visible += 1;
+    }
+  }
+
+  const counter = document.getElementById("terminal-filter-count");
+  counter.textContent = terminalState.filter ? `${visible}/${items.length} items visible` : "No filter";
 }
 
 function renderMetrics({ portfolio, performance, risk, regime }) {
@@ -489,6 +639,85 @@ function renderAudit(logs) {
     .join("");
 }
 
+function renderTradingAlgoResult(payload) {
+  const summary = document.getElementById("algo-summary");
+  const result = document.getElementById("algo-result");
+  const table = document.getElementById("algo-table");
+
+  summary.textContent = `${payload.status} / ${payload.command}`;
+  result.textContent = JSON.stringify(
+    {
+      generated_at: payload.generated_at,
+      summary: payload.summary,
+      errors: payload.errors
+    },
+    null,
+    2
+  );
+
+  if (!payload.analyses?.length) {
+    table.innerHTML = emptyRow(10, "No trading-algo results returned.");
+    return;
+  }
+
+  table.innerHTML = payload.analyses
+    .map(
+      (item) => `
+        <tr>
+          <td>${item.symbol}</td>
+          <td><span class="${toneChipClass(item.trend)}">${roleLabel(item.trend)}</span></td>
+          <td><span class="${toneChipClass(item.recommendation)}">${roleLabel(item.recommendation)}</span></td>
+          <td>${item.latest_price === null ? "--" : fmtCurrency(item.latest_price)}</td>
+          <td class="${(item.daily_return ?? 0) >= 0 ? "gain" : "loss"}">${item.daily_return === null ? "--" : fmtPercent(item.daily_return, 2)}</td>
+          <td class="${(item.total_return ?? 0) >= 0 ? "gain" : "loss"}">${item.total_return === null ? "--" : fmtPercent(item.total_return, 1)}</td>
+          <td>${item.volatility_20d === null ? "--" : fmtPercent(item.volatility_20d, 1)}</td>
+          <td>${fmtNullable(item.sharpe_ratio, 2)}</td>
+          <td class="loss">${item.var_95 === null ? "--" : fmtPercent(item.var_95, 2)}</td>
+          <td>${fmtNullable(item.rsi, 1)}</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  applyTerminalFilter(document.getElementById("terminal-filter").value);
+}
+
+async function runTradingAlgoCommand(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  const result = document.getElementById("algo-result");
+  const summary = document.getElementById("algo-summary");
+  const symbols = String(data.get("symbols") ?? "")
+    .split(",")
+    .map((symbol) => symbol.trim())
+    .filter(Boolean);
+
+  const payload = {
+    command: data.get("command"),
+    symbols,
+    period: data.get("period"),
+    max_symbols: Number(data.get("max_symbols") || 8)
+  };
+
+  summary.textContent = "Running";
+  result.textContent = "Running trading-algo command...";
+
+  try {
+    const response = await fetchJson("/terminal/trading-algo", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    renderTradingAlgoResult(response);
+  } catch (error) {
+    summary.textContent = "Error";
+    result.textContent = String(error);
+  }
+}
+
 async function submitOrder(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -577,6 +806,7 @@ async function loadTerminal(runRefresh = true) {
 
     const snapshot = await fetchJson("/terminal/snapshot");
 
+    renderTerminalControls(snapshot);
     renderMetrics(snapshot);
     renderHistory(snapshot.history, snapshot.portfolio);
     renderSignals({
@@ -597,6 +827,7 @@ async function loadTerminal(runRefresh = true) {
     renderSectors(snapshot.sectors);
     renderUsers(snapshot.users);
     renderAudit(snapshot.audit_logs);
+    applyTerminalFilter(document.getElementById("terminal-filter").value);
 
     badge.textContent = "Connected";
     badge.classList.remove("loss");
@@ -610,6 +841,16 @@ async function loadTerminal(runRefresh = true) {
   }
 }
 
+document.getElementById("algo-form").addEventListener("submit", runTradingAlgoCommand);
 document.getElementById("order-form").addEventListener("submit", submitOrder);
 document.getElementById("refresh-button").addEventListener("click", refreshPortfolioPrices);
+document.getElementById("terminal-filter").addEventListener("input", (event) => {
+  applyTerminalFilter(event.currentTarget.value);
+});
+document.getElementById("terminal-filter-clear").addEventListener("click", () => {
+  const input = document.getElementById("terminal-filter");
+  input.value = "";
+  applyTerminalFilter("");
+  input.focus();
+});
 loadTerminal();

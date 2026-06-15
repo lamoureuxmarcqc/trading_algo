@@ -24,7 +24,7 @@ Cette couche apporte :
 - un cockpit frontend Next.js initial aligné sur les pages CIO / trader / risk / research
 - une base de gouvernance institutionnelle via ADRs, standards API et conventions event-driven
 - un cockpit Next.js désormais branché sur `api-core` avec fallback si l'API n'est pas disponible
-- un terminal web FastAPI agrege via snapshot unique pour limiter le fan-out reseau
+- un terminal web FastAPI agrege via snapshot unique, avec controles de fraicheur, alertes operationnelles et filtre global
 - un domaine risque enrichi avec stress historiques et matrice de corrélation
 - une strategie d'allocation `barbell` exploitable en API et visible dans le cockpit portefeuille
 - un socle Alembic pour versionner la base PostgreSQL
