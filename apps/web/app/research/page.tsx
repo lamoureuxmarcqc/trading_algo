@@ -1,4 +1,5 @@
 import { PageShell } from "@/components/page-shell";
+import { TradingAlgoConsole } from "@/components/trading-algo-console";
 import { formatCurrency, formatPercent, getResearchData } from "@/lib/api";
 
 export default async function ResearchPage() {
@@ -28,6 +29,8 @@ export default async function ResearchPage() {
           <p className="mt-4 text-2xl text-white">{sectors[0]?.stance ?? "n/a"}</p>
         </div>
       </section>
+
+      <TradingAlgoConsole />
 
       <section className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
         <div className="panel p-6">

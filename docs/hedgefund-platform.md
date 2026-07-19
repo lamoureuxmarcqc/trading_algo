@@ -63,6 +63,7 @@ Le terminal web servi directement par FastAPI a aussi ete durci:
 - visibilite immediate sur l'etat de livraison de l'outbox evenementielle
 - surface de controle du snapshot: fraicheur marche, ordres ouverts, alertes risque/outbox
 - filtre global cote client pour explorer rapidement les tableaux et scenarios sans nouvel appel API
+- passerelle `trading_algo` integree: `analyze`, `compare` et `screen` executables depuis l'UI ou `POST /api/v1/terminal/trading-algo`
 
 ## Risk Intelligence
 
@@ -84,6 +85,17 @@ Le socle `api-core` embarque maintenant une implementation initiale de la strate
 - allocation pilotee par le regime de marche et les signaux quantitatifs
 - exposition via `GET /api/v1/portfolio/barbell` et `POST /api/v1/portfolio/barbell`
 
+## Trading Algo Integration
+
+Le premier point de fusion entre le package historique `trading_algo` et le terminal institutionnel est livre dans `api-core`:
+
+- service applicatif `TradingAlgoTerminalService`
+- endpoint `POST /api/v1/terminal/trading-algo`
+- panneau web **Trading Algo / Analysis Console** dans le terminal FastAPI
+- tests sans dependance reseau dans `services/api-core/tests/test_trading_algo_terminal.py`
+
+La passerelle appelle directement les modules Python existants (`StockDataExtractor`, `RiskManager`) au lieu de lancer une commande shell arbitraire. Elle retourne un contrat stable pour le frontend: prix, tendance, recommandation, RSI, moyennes mobiles, volatilite, Sharpe, VaR et drawdown.
+
 ## Database Versioning
 
 Alembic est maintenant prepare pour versionner `services/api-core`:
@@ -94,8 +106,9 @@ Alembic est maintenant prepare pour versionner `services/api-core`:
 
 ## Étapes suivantes
 
-1. Brancher les endpoints du `api-core` sur PostgreSQL avec SQLAlchemy.
-2. Remplacer les données de démonstration par les agrégats `trading_algo`.
-3. Ajouter le realtime gateway NestJS / Socket.IO.
-4. Câbler le frontend aux endpoints FastAPI.
-5. Ajouter workers Celery, ingestion broker et contrôles de risque pré-trade.
+1. Etendre la passerelle `trading_algo` aux vrais moteurs de screening/modeles quand les modules `trading_algo.models` seront disponibles dans le repo.
+2. Brancher les endpoints du `api-core` sur PostgreSQL avec SQLAlchemy.
+3. Remplacer les données de démonstration restantes par les agrégats `trading_algo`.
+4. Ajouter le realtime gateway NestJS / Socket.IO.
+5. Câbler le frontend aux endpoints FastAPI.
+6. Ajouter workers Celery, ingestion broker et contrôles de risque pré-trade.

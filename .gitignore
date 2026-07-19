@@ -21,6 +21,18 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
+.vscode/
+
+# Si c'est un projet Next.js (très probable avec webpackChunk_N_E)
+.next/
+
+# Dossiers de builds généraux
+dist/
+build/
+out/
+
+
 
 # C extensions
 *.so
@@ -46,6 +58,21 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+
+
+# Node / PNPM
+node_modules/
+.pnpm-store/
+.pnpm/
+apps/web/node_modules/
+apps/web/.pnpm-store/
+apps/web/.pnpm/
+apps/web/.next/
+apps/web/dist/
+
+# Environnements locaux
+*.env.local
+*.env.local.example
 
 
 # PyInstaller

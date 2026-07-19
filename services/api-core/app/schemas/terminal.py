@@ -70,4 +70,4 @@ class TradingAlgoCommandResponse(BaseModel):
     generated_at: str
     summary: str
     analyses: list[TradingAlgoSymbolAnalysis]
-    errors: list[str] = []
+    errors: list[str] = Field(default_factory=list)

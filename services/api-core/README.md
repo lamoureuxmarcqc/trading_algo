@@ -40,6 +40,7 @@ http://127.0.0.1:8000/api/v1/terminal
 ```
 
 Le terminal integre charge maintenant un snapshot agrege unique via `GET /api/v1/terminal/snapshot`.
+Il expose aussi une console `trading_algo` via `POST /api/v1/terminal/trading-algo`.
 
 Seed inclus par défaut :
 
@@ -53,6 +54,7 @@ Seed inclus par défaut :
 - `GET /` redirect vers le terminal web intégré
 - `GET /api/v1/terminal`
 - `GET /api/v1/terminal/snapshot`
+- `POST /api/v1/terminal/trading-algo`
 - `GET /api/v1/health`
 - `GET /api/v1/ready`
 - `GET /api/v1/metrics`
@@ -167,6 +169,41 @@ Le service est actuellement en mode `transitional`: les headers sont supportés 
   - nombre d'ordres ouverts
   - alertes outbox, concentration, correlation, VaR et fraicheur de marche
   - filtre global cote client pour retrouver rapidement symboles, ordres, secteurs et utilisateurs
+
+## Trading Algo Terminal Bridge
+
+`POST /api/v1/terminal/trading-algo` connecte le terminal FastAPI au package historique `trading_algo` sans exposer de shell arbitraire.
+
+Commandes supportees:
+
+- `analyze`: analyse les symboles demandes.
+- `compare`: analyse puis classe les symboles demandes.
+- `screen`: utilise la meme analyse sur l'univers fourni, ou l'univers par defaut si `symbols` est vide.
+
+Payload:
+
+```json
+{
+  "command": "compare",
+  "symbols": ["AAPL", "MSFT", "NVDA"],
+  "period": "1y",
+  "max_symbols": 8
+}
+```
+
+La reponse contient:
+
+- `summary` et `status` (`ok`, `partial`, `error`)
+- une ligne par symbole avec prix, tendance, recommandation, RSI, SMA 20/50, volatilite 20 jours, Sharpe, VaR 95 et max drawdown
+- `errors` pour les symboles non recuperables sans bloquer les autres resultats
+
+Le panneau web **Trading Algo / Analysis Console** consomme cet endpoint directement depuis `/api/v1/terminal`.
+
+Test cible:
+
+```bash
+venv\Scripts\python.exe -m pytest services\api-core\tests\test_trading_algo_terminal.py -q
+```
 
 ## Alembic
 

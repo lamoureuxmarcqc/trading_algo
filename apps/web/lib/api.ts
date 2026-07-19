@@ -258,6 +258,43 @@ export type TerminalSnapshotResponse = {
   event_summary: DomainEventSummary;
 };
 
+export type TradingAlgoCommand = "analyze" | "compare" | "screen";
+
+export type TradingAlgoCommandRequest = {
+  command: TradingAlgoCommand;
+  symbols: string[];
+  period: string;
+  max_symbols: number;
+};
+
+export type TradingAlgoSymbolAnalysis = {
+  symbol: string;
+  period: string;
+  rows: number;
+  as_of?: string | null;
+  latest_price?: number | null;
+  daily_return?: number | null;
+  total_return?: number | null;
+  volatility_20d?: number | null;
+  sharpe_ratio?: number | null;
+  var_95?: number | null;
+  max_drawdown?: number | null;
+  rsi?: number | null;
+  sma_20?: number | null;
+  sma_50?: number | null;
+  trend: string;
+  recommendation: string;
+};
+
+export type TradingAlgoCommandResponse = {
+  command: TradingAlgoCommand | string;
+  status: "ok" | "partial" | "error" | string;
+  generated_at: string;
+  summary: string;
+  analyses: TradingAlgoSymbolAnalysis[];
+  errors: string[];
+};
+
 export type DashboardData = {
   portfolio: PortfolioOverview;
   performance: PortfolioPerformance;

@@ -25,6 +25,7 @@ Cette couche apporte :
 - une base de gouvernance institutionnelle via ADRs, standards API et conventions event-driven
 - un cockpit Next.js désormais branché sur `api-core` avec fallback si l'API n'est pas disponible
 - un terminal web FastAPI agrege via snapshot unique, avec controles de fraicheur, alertes operationnelles et filtre global
+- une passerelle `trading_algo` integree au terminal FastAPI pour lancer `analyze`, `compare` et `screen` depuis l'UI ou l'API
 - un domaine risque enrichi avec stress historiques et matrice de corrélation
 - une strategie d'allocation `barbell` exploitable en API et visible dans le cockpit portefeuille
 - un socle Alembic pour versionner la base PostgreSQL
@@ -120,6 +121,43 @@ L'outil s'utilise principalement via la commande globale `trading-algo`.
 L'outil web de trading
 uvicorn app.main:app --reload --app-dir C:\Users\marc\source\projet_trading\services\api-core
 
+### Terminal institutionnel + trading-algo
+
+Le terminal FastAPI est accessible sur :
+
+```bash
+uvicorn app.main:app --reload --app-dir services/api-core
+```
+
+Puis ouvrez :
+
+```text
+http://127.0.0.1:8000/api/v1/terminal
+```
+
+La section **Trading Algo / Analysis Console** fusionne le moteur `trading_algo` avec le terminal institutionnel. Elle permet de lancer :
+
+- `analyze` : analyse un ou plusieurs symboles avec prix, tendance, RSI, volatilite, Sharpe, VaR et drawdown
+- `compare` : classe plusieurs symboles selon le retour total, la recommandation et le Sharpe
+- `screen` : applique le meme scoring a un univers limite de symboles pour trouver les meilleurs candidats
+
+L'endpoint correspondant est :
+
+```http
+POST /api/v1/terminal/trading-algo
+```
+
+Exemple de payload :
+
+```json
+{
+  "command": "compare",
+  "symbols": ["AAPL", "MSFT", "NVDA"],
+  "period": "1y",
+  "max_symbols": 8
+}
+```
+
 ---
 
 ## 📊 Sorties et Artefacts
@@ -140,6 +178,9 @@ python -m unittest discover tests
 
 # Test spécifique des imports
 python trading_algo/test_imports.py
+
+# Tests api-core de la passerelle trading_algo/terminal
+venv\Scripts\python.exe -m pytest services\api-core\tests\test_trading_algo_terminal.py -q
 ```
 
 ---
