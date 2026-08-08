@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from app.schemas.trading import OrderResponse
+
 
 class PortfolioPosition(BaseModel):
     symbol: str
@@ -40,6 +42,9 @@ class RebalanceTarget(BaseModel):
 
 class RebalanceRequest(BaseModel):
     targets: list[RebalanceTarget]
+    generate_orders: bool = False
+    cash_buffer_target: float = Field(default=0.15, ge=0, le=0.50)
+    min_trade_value: float = Field(default=500.0, ge=0)
 
 
 class RebalanceInstruction(BaseModel):
@@ -51,6 +56,12 @@ class RebalanceInstruction(BaseModel):
 class RebalanceResponse(BaseModel):
     generated_at: str
     instructions: list[RebalanceInstruction]
+    orders: list[OrderResponse] = Field(default_factory=list)
+    projected_cash: float | None = None
+    projected_cash_weight: float | None = None
+    projected_gross_exposure: float | None = None
+    projected_net_exposure: float | None = None
+    notes: list[str] = Field(default_factory=list)
 
 
 class BarbellStrategyConfig(BaseModel):
@@ -98,3 +109,28 @@ class PortfolioHistoryPoint(BaseModel):
     gross_exposure: float
     net_exposure: float
     benchmark: str
+
+
+class OptimizationTarget(BaseModel):
+    symbol: str
+    current_weight: float
+    recommended_weight: float
+    delta_weight: float
+    expected_return: float
+    volatility: float
+    bucket: str
+
+
+class AllocationOptimizationResponse(BaseModel):
+    generated_at: str
+    status: str
+    objective: str
+    expected_annual_return: float
+    expected_annual_volatility: float
+    simulated_sharpe_ratio: float
+    var_95: float
+    cvar_95: float
+    cash_buffer_weight: float
+    targets: list[OptimizationTarget]
+    barbell: BarbellAllocationResponse
+    notes: list[str] = Field(default_factory=list)

@@ -5,6 +5,8 @@ from fastapi.responses import FileResponse
 
 from app.api.deps import get_platform_service
 from app.schemas.terminal import (
+    MonteCarloSimulationRequest,
+    MonteCarloSimulationResponse,
     TerminalSnapshotResponse,
     TradingAlgoCommandRequest,
     TradingAlgoCommandResponse,
@@ -32,3 +34,11 @@ def terminal_snapshot(
 @router.post("/terminal/trading-algo", response_model=TradingAlgoCommandResponse)
 def run_trading_algo_command(payload: TradingAlgoCommandRequest) -> TradingAlgoCommandResponse:
     return TradingAlgoTerminalService().run(payload)
+
+
+@router.post("/simulate/monte-carlo", response_model=MonteCarloSimulationResponse)
+def run_monte_carlo_simulation(
+    payload: MonteCarloSimulationRequest,
+    platform_service: PlatformService = Depends(get_platform_service),
+) -> MonteCarloSimulationResponse:
+    return platform_service.run_monte_carlo_simulation(payload)

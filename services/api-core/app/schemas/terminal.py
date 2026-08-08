@@ -71,3 +71,30 @@ class TradingAlgoCommandResponse(BaseModel):
     summary: str
     analyses: list[TradingAlgoSymbolAnalysis]
     errors: list[str] = Field(default_factory=list)
+
+
+class MonteCarloTrajectory(BaseModel):
+    day: int
+    p5_nav: float
+    p50_nav: float
+    p95_nav: float
+
+
+class MonteCarloSimulationRequest(BaseModel):
+    n_paths: int = Field(default=1000, ge=100, le=5000)
+    horizon_days: int = Field(default=252, ge=21, le=756)
+    proposed_weights: dict[str, float] | None = None
+
+
+class MonteCarloSimulationResponse(BaseModel):
+    generated_at: str
+    n_paths: int
+    horizon_days: int
+    nav: float
+    expected_annual_return: float
+    simulated_sharpe_ratio: float
+    var_95: float
+    cvar_95: float
+    trajectory: list[MonteCarloTrajectory]
+    symbols: list[str]
+    methodology: str

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import math
 from typing import Any, Iterable
 
+import numpy as np
 import pandas as pd
 
 from app.schemas.terminal import (
@@ -17,7 +18,7 @@ class TradingAlgoTerminalService:
     """Small API-safe bridge from the institutional terminal to trading_algo."""
 
     DEFAULT_SCREEN_UNIVERSE = ["AAPL", "MSFT", "NVDA", "AMZN", "META", "JPM", "XOM", "LLY"]
-    ALLOWED_COMMANDS = {"analyze", "compare", "screen"}
+    ALLOWED_COMMANDS = {"analyze", "compare", "screen", "simulate"}
 
     def __init__(
         self,
@@ -48,6 +49,9 @@ class TradingAlgoTerminalService:
             )
 
         symbols = self._symbols_for(payload)
+        if command == "simulate":
+            return self._run_monte_carlo(payload, symbols)
+
         analyses: list[TradingAlgoSymbolAnalysis] = []
         errors: list[str] = []
 
@@ -92,6 +96,87 @@ class TradingAlgoTerminalService:
                 if symbol and symbol not in symbols:
                     symbols.append(symbol)
         return (symbols or self.DEFAULT_SCREEN_UNIVERSE)[:max_symbols]
+
+    def _run_monte_carlo(
+        self,
+        payload: TradingAlgoCommandRequest,
+        symbols: list[str],
+    ) -> TradingAlgoCommandResponse:
+        from trading_algo.analytics.simulation import run_monte_carlo
+
+        try:
+            returns_map: dict[str, pd.Series] = {}
+            for symbol in symbols:
+                history = self.extractor.get_historical_data(symbol=symbol, period=payload.period)
+                if history.empty:
+                    continue
+                close = history["Close"].dropna().astype(float)
+                daily = close.pct_change().replace([math.inf, -math.inf], pd.NA).dropna()
+                if not daily.empty:
+                    returns_map[symbol] = daily.tail(252)
+            if not returns_map:
+                raise ValueError("no return history available for simulation")
+
+            frame = pd.DataFrame(returns_map).dropna(how="all").ffill().dropna().tail(252)
+            weights = np.array([1.0 / len(frame.columns)] * len(frame.columns))
+            np.random.seed(42)
+            paths = run_monte_carlo(
+                weights=weights,
+                returns=frame,
+                n_simulations=min(max(int(payload.max_symbols or 8), 100), 1000),
+                timeframe=252,
+                block_size=20,
+                use_stochastic_vol=True,
+            )
+            final_returns = (paths[-1, :] / 100.0) - 1.0
+            var_95 = float(np.percentile(final_returns, 5))
+            tail = final_returns[final_returns <= var_95]
+            daily_returns = (paths[1:, :] / np.maximum(paths[:-1, :], 1e-9)) - 1.0
+            std_daily = float(np.std(daily_returns))
+            sharpe = ((float(np.mean(daily_returns)) * 252) / (std_daily * math.sqrt(252))) if std_daily > 0 else 0.0
+
+            analyses = [
+                TradingAlgoSymbolAnalysis(
+                    symbol=symbol,
+                    period=payload.period,
+                    rows=int(len(frame)),
+                    as_of=self._index_as_iso(frame.index[-1]) if len(frame.index) else None,
+                    latest_price=None,
+                    daily_return=None,
+                    total_return=round(float(np.mean(final_returns)), 4),
+                    volatility_20d=round(float(frame[symbol].tail(20).std() * math.sqrt(252)), 4)
+                    if symbol in frame.columns
+                    else None,
+                    sharpe_ratio=round(sharpe, 4),
+                    var_95=round(var_95, 4),
+                    max_drawdown=None,
+                    rsi=None,
+                    sma_20=None,
+                    sma_50=None,
+                    trend="simulated",
+                    recommendation="watch",
+                )
+                for symbol in frame.columns[:1]
+            ]
+            return self._response(
+                command="simulate",
+                status="ok",
+                summary=(
+                    f"Monte Carlo ({paths.shape[1]} paths, 252 days) on {', '.join(frame.columns)}. "
+                    f"Expected return {round(float(np.mean(final_returns)) * 100, 2)}%, "
+                    f"Sharpe {round(sharpe, 2)}, VaR 95 {round(var_95 * 100, 2)}%."
+                ),
+                analyses=analyses,
+                errors=[],
+            )
+        except Exception as exc:
+            return self._response(
+                command="simulate",
+                status="error",
+                summary="Monte Carlo simulation failed.",
+                analyses=[],
+                errors=[str(exc)],
+            )
 
     def _analyze_symbol(self, symbol: str, period: str) -> TradingAlgoSymbolAnalysis:
         history = self.extractor.get_historical_data(symbol=symbol, period=period)

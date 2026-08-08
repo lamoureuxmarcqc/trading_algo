@@ -119,13 +119,14 @@ L'outil s'utilise principalement via la commande globale `trading-algo`.
 | `trading-algo --mode screen` | Recherche les meilleures opportunités du S&P 500. |
 
 L'outil web de trading
-uvicorn app.main:app --reload --app-dir C:\Users\marc\source\projet_trading\services\api-core
+uvicorn app.main:app --reload --app-dir ...\projet_trading\services\api-core
 
 ### Terminal institutionnel + trading-algo
 
 Le terminal FastAPI est accessible sur :
 
 ```bash
+.\venv\Scripts\activate
 uvicorn app.main:app --reload --app-dir services/api-core
 ```
 

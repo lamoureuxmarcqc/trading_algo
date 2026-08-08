@@ -66,7 +66,11 @@ Seed inclus par défaut :
 - `GET /api/v1/portfolio/positions`
 - `GET /api/v1/portfolio/barbell`
 - `POST /api/v1/portfolio/barbell`
+- `POST /api/v1/portfolio/barbell/rebalance`
 - `POST /api/v1/portfolio/rebalance`
+- `POST /api/v1/portfolio/optimize-allocation`
+- `POST /api/v1/portfolio/optimize-allocation/apply`
+- `POST /api/v1/simulate/monte-carlo`
 - `POST /api/v1/orders`
 - `GET /api/v1/orders`
 - `DELETE /api/v1/orders/{order_id}`

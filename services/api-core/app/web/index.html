@@ -112,6 +112,55 @@
         <pre id="algo-result" class="result-box compact">Awaiting trading-algo command.</pre>
       </section>
 
+      <section class="grid two-up">
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Simulation</p>
+              <h2>Monte Carlo NAV</h2>
+            </div>
+            <button id="run-monte-carlo-button" class="button secondary" type="button">Run 1,000 Paths</button>
+          </div>
+          <div class="metrics" id="monte-carlo-metrics"></div>
+          <div class="history-chart-wrap">
+            <svg id="monte-carlo-chart" class="sparkline" viewBox="0 0 720 260" preserveAspectRatio="none"></svg>
+          </div>
+          <pre id="monte-carlo-result" class="result-box compact">Awaiting simulation.</pre>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Optimization</p>
+              <h2>Efficient Frontier</h2>
+            </div>
+            <div class="button-row">
+              <button id="optimize-allocation-button" class="button secondary" type="button">Optimize Allocation</button>
+              <button id="apply-optimized-allocation-button" class="button primary" type="button">Apply Recommended Allocation</button>
+            </div>
+          </div>
+          <div class="metrics" id="optimization-metrics"></div>
+          <div class="table-wrap algo-results">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Bucket</th>
+                  <th>Current</th>
+                  <th>Target</th>
+                  <th>Delta</th>
+                  <th>Return</th>
+                </tr>
+              </thead>
+              <tbody id="optimization-table">
+                <tr><td colspan="6" class="empty-state">No optimization has run yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <pre id="optimization-result" class="result-box compact">Awaiting allocation optimizer.</pre>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="section-head">
           <div>
@@ -176,18 +225,18 @@
           <form id="order-form" class="order-form">
             <label>
               Symbol
-              <input name="symbol" value="AAPL" required />
+              <input name="symbol" id="order-symbol" value="AAPL" required />
             </label>
             <label>
               Side
-              <select name="side">
+              <select name="side" id="order-side">
                 <option value="BUY">BUY</option>
                 <option value="SELL">SELL</option>
               </select>
             </label>
             <label>
               Order Type
-              <select name="order_type">
+              <select name="order_type" id="order-type">
                 <option value="market">market</option>
                 <option value="limit" selected>limit</option>
                 <option value="stop">stop</option>
@@ -195,26 +244,53 @@
             </label>
             <label>
               Quantity
-              <input name="quantity" type="number" step="1" min="1" value="25" required />
+              <input name="quantity" id="order-quantity" type="number" step="1" min="1" value="25" required />
             </label>
             <label>
               Limit Price
-              <input name="limit_price" type="number" step="0.01" value="190.00" />
+              <input name="limit_price" id="order-limit-price" type="number" step="0.01" value="190.00" />
             </label>
             <label>
               Stop Price
-              <input name="stop_price" type="number" step="0.01" />
+              <input name="stop_price" id="order-stop-price" type="number" step="0.01" />
             </label>
             <label>
               Broker
-              <input name="broker" value="paper" />
+              <input name="broker" id="order-broker" value="paper" />
             </label>
             <label>
               Strategy Tag
-              <input name="strategy_tag" value="manual" />
+              <input name="strategy_tag" id="order-strategy-tag" value="manual" />
             </label>
             <button class="button primary" type="submit">Send Order</button>
           </form>
+          <div class="order-queue-wrap">
+            <div class="section-head compact">
+              <div>
+                <p class="eyebrow">Queue</p>
+                <h3>Pending Orders</h3>
+              </div>
+              <span id="pending-orders-count" class="micro">0 pending</span>
+            </div>
+            <div class="table-wrap compact">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Side</th>
+                    <th>Type</th>
+                    <th>Qty</th>
+                    <th>Limit</th>
+                    <th>Tag</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="pending-orders-table">
+                  <tr><td colspan="7" class="empty-state">No pending orders in queue.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
           <pre id="order-result" class="result-box">No order submitted yet.</pre>
         </div>
       </section>
@@ -260,9 +336,13 @@
               <p class="eyebrow">Portfolio Construction</p>
               <h2>Barbell Allocation</h2>
             </div>
-            <span id="barbell-regime" class="micro">--</span>
+            <div class="button-row">
+              <button id="rebalance-barbell-button" class="button primary" type="button">Rebalance Portfolio</button>
+              <span id="barbell-regime" class="micro">--</span>
+            </div>
           </div>
           <div class="metrics" id="barbell-metrics"></div>
+          <div class="metrics control-metrics" id="rebalance-projection-metrics"></div>
           <p id="barbell-rationale" class="metric-delta"></p>
           <div class="table-wrap">
             <table>
@@ -337,7 +417,7 @@
         <div class="section-head">
           <div>
             <p class="eyebrow">Orders</p>
-            <h2>Recent Orders</h2>
+            <h2>Order History</h2>
           </div>
         </div>
         <div class="table-wrap">
@@ -502,6 +582,7 @@
         </div>
       </section>
     </div>
+    <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
 
     <script src="/terminal-assets/app.js"></script>
   </body>

@@ -4,6 +4,7 @@ from app.api.deps import get_platform_service
 from app.core.config import settings
 from app.events.dispatcher import outbox_dispatcher
 from app.schemas.portfolio import (
+    AllocationOptimizationResponse,
     BarbellAllocationResponse,
     BarbellStrategyConfig,
     PortfolioHistoryPoint,
@@ -61,10 +62,44 @@ def build_barbell_allocation(
 
 @router.post("/rebalance", response_model=RebalanceResponse)
 def rebalance_portfolio(
+    request: Request,
     payload: RebalanceRequest,
     platform_service: PlatformService = Depends(get_platform_service),
 ) -> RebalanceResponse:
-    return platform_service.rebalance_portfolio(payload)
+    return platform_service.rebalance_portfolio(
+        payload,
+        tenant_id=getattr(request.state, "tenant_id", "public"),
+        correlation_id=getattr(request.state, "correlation_id", None),
+    )
+
+
+@router.post("/barbell/rebalance", response_model=RebalanceResponse)
+def rebalance_barbell_portfolio(
+    request: Request,
+    platform_service: PlatformService = Depends(get_platform_service),
+) -> RebalanceResponse:
+    return platform_service.rebalance_barbell_portfolio(
+        tenant_id=getattr(request.state, "tenant_id", "public"),
+        correlation_id=getattr(request.state, "correlation_id", None),
+    )
+
+
+@router.post("/optimize-allocation", response_model=AllocationOptimizationResponse)
+def optimize_allocation(
+    platform_service: PlatformService = Depends(get_platform_service),
+) -> AllocationOptimizationResponse:
+    return platform_service.optimize_barbell_allocation()
+
+
+@router.post("/optimize-allocation/apply", response_model=AllocationOptimizationResponse)
+def apply_optimized_allocation(
+    request: Request,
+    platform_service: PlatformService = Depends(get_platform_service),
+) -> AllocationOptimizationResponse:
+    return platform_service.optimize_barbell_allocation(
+        apply_to_barbell=True,
+        tenant_id=getattr(request.state, "tenant_id", "public"),
+    )
 
 
 @router.post("/refresh", response_model=PortfolioRefreshResponse)

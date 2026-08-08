@@ -10,7 +10,10 @@ const fmtTime = (value) => new Date(value).toLocaleString();
 const roleLabel = (value) => String(value ?? "").replaceAll("_", " ");
 const fmtNullable = (value, digits = 2) => (value === null || value === undefined ? "--" : Number(value).toFixed(digits));
 const terminalState = {
-  filter: ""
+  filter: "",
+  latestOptimization: null,
+  projectedExposure: null,
+  activePendingOrderId: null
 };
 
 function fmtAge(value) {
@@ -66,6 +69,17 @@ async function fetchJson(path, options) {
     throw new Error(`Request failed for ${path}: ${response.status}`);
   }
   return response.json();
+}
+
+function showToast(title, message, tone = "neutral") {
+  const stack = document.getElementById("toast-stack");
+  const toast = document.createElement("div");
+  toast.className = `toast ${tone}`;
+  toast.innerHTML = `<strong>${title}</strong>${message}`;
+  stack.appendChild(toast);
+  window.setTimeout(() => {
+    toast.remove();
+  }, 5200);
 }
 
 function renderTerminalControls(snapshot) {
@@ -182,19 +196,26 @@ function applyTerminalFilter(query) {
   counter.textContent = terminalState.filter ? `${visible}/${items.length} items visible` : "No filter";
 }
 
-function renderMetrics({ portfolio, performance, risk, regime }) {
+function renderMetrics({ portfolio, performance, risk, regime }, projection = null) {
+  const grossExposure = projection?.projected_gross_exposure ?? portfolio.gross_exposure;
+  const netExposure = projection?.projected_net_exposure ?? portfolio.net_exposure;
+  const projectedCash = projection?.projected_cash;
+  const navDelta = projection
+    ? `Cash ${fmtCurrency(projectedCash ?? portfolio.cash, portfolio.base_currency)} projected`
+    : `${fmtPercent(performance.day_return, 2)} today`;
+
   const metrics = [
     {
       title: "NAV",
       value: fmtCurrency(portfolio.nav, portfolio.base_currency),
-      delta: `${fmtPercent(performance.day_return, 2)} today`,
+      delta: navDelta,
       tone: performance.day_return >= 0 ? "gain" : "loss"
     },
     {
-      title: "Gross Exposure",
-      value: fmtPercent(portfolio.gross_exposure),
-      delta: `Net ${fmtPercent(portfolio.net_exposure)}`,
-      tone: ""
+      title: projection ? "Gross Exposure (Proj.)" : "Gross Exposure",
+      value: fmtPercent(grossExposure),
+      delta: projection ? `Net ${fmtPercent(netExposure)} projected` : `Net ${fmtPercent(netExposure)}`,
+      tone: projection ? "neutral" : ""
     },
     {
       title: "VaR 95",
@@ -347,6 +368,319 @@ function renderBarbell(barbell) {
     .join("");
 }
 
+function renderRebalanceProjection(payload) {
+  const metrics = document.getElementById("rebalance-projection-metrics");
+  if (!payload || payload.projected_cash === null || payload.projected_cash === undefined) {
+    metrics.innerHTML = "";
+    return;
+  }
+
+  metrics.innerHTML = [
+    {
+      title: "Projected Cash",
+      value: fmtCurrency(payload.projected_cash),
+      delta: `Buffer ${fmtPercent(payload.projected_cash_weight, 1)}`,
+      tone: payload.projected_cash_weight >= 0.15 ? "gain" : "loss"
+    },
+    {
+      title: "Projected Gross",
+      value: fmtPercent(payload.projected_gross_exposure, 1),
+      delta: "after pending rebalance",
+      tone: ""
+    },
+    {
+      title: "Projected Net",
+      value: fmtPercent(payload.projected_net_exposure, 1),
+      delta: `${payload.orders?.length ?? 0} order(s) staged`,
+      tone: "neutral"
+    }
+  ]
+    .map(
+      (metric) => `
+        <div class="panel metric-card">
+          <h3>${metric.title}</h3>
+          <div class="metric-value ${metric.tone}">${metric.value}</div>
+          <div class="metric-delta">${metric.delta}</div>
+        </div>
+      `
+    )
+    .join("");
+}
+
+function isOpenOrder(order) {
+  return !["cancelled", "filled", "rejected"].includes(String(order.status).toLowerCase());
+}
+
+function populateOrderForm(order) {
+  if (!order) {
+    return;
+  }
+  document.getElementById("order-symbol").value = order.symbol ?? "";
+  document.getElementById("order-side").value = String(order.side ?? "BUY").toUpperCase();
+  document.getElementById("order-type").value = order.order_type ?? "limit";
+  document.getElementById("order-quantity").value = order.quantity ?? "";
+  document.getElementById("order-limit-price").value = order.limit_price ?? "";
+  document.getElementById("order-stop-price").value = order.stop_price ?? "";
+  document.getElementById("order-broker").value = order.broker ?? "paper";
+  document.getElementById("order-strategy-tag").value = order.strategy_tag ?? "manual";
+  terminalState.activePendingOrderId = order.id ?? null;
+  renderPendingOrdersQueue(window.__latestOrders ?? []);
+}
+
+function renderPendingOrdersQueue(orders) {
+  window.__latestOrders = orders;
+  const body = document.getElementById("pending-orders-table");
+  const counter = document.getElementById("pending-orders-count");
+  const pending = orders.filter(isOpenOrder);
+  counter.textContent = `${pending.length} pending`;
+
+  if (!pending.length) {
+    body.innerHTML = emptyRow(7, "No pending orders in queue.");
+    return;
+  }
+
+  body.innerHTML = pending
+    .map(
+      (order) => `
+        <tr class="pending-order-row ${terminalState.activePendingOrderId === order.id ? "is-active" : ""}">
+          <td>${order.symbol}</td>
+          <td><span class="${toneChipClass(order.side)}">${order.side}</span></td>
+          <td>${order.order_type}</td>
+          <td>${order.quantity}</td>
+          <td>${order.limit_price ?? "--"}</td>
+          <td>${order.strategy_tag ?? "--"}</td>
+          <td>
+            <button class="link-button" type="button" onclick="populateOrderForm(window.__latestOrders.find((item) => item.id === '${order.id}'))">
+              Load
+            </button>
+          </td>
+        </tr>
+      `
+    )
+    .join("");
+}
+
+function applyProjectedExposure(projection) {
+  terminalState.projectedExposure = projection ?? null;
+  if (window.__latestSnapshot) {
+    renderMetrics(window.__latestSnapshot, terminalState.projectedExposure);
+  }
+}
+
+async function rebalanceBarbellPortfolio() {
+  const result = document.getElementById("order-result");
+  result.textContent = "Generating barbell rebalance orders...";
+
+  try {
+    const response = await fetchJson("/portfolio/barbell/rebalance", { method: "POST" });
+    terminalState.projectedExposure = {
+      projected_cash: response.projected_cash,
+      projected_cash_weight: response.projected_cash_weight,
+      projected_gross_exposure: response.projected_gross_exposure,
+      projected_net_exposure: response.projected_net_exposure
+    };
+    await loadTerminal(false);
+    renderRebalanceProjection(response);
+    applyProjectedExposure(terminalState.projectedExposure);
+    if (response.orders?.length) {
+      populateOrderForm(response.orders[0]);
+    }
+    result.textContent = JSON.stringify(
+      {
+        generated_at: response.generated_at,
+        orders: response.orders,
+        notes: response.notes
+      },
+      null,
+      2
+    );
+    showToast(
+      "Barbell rebalance staged",
+      `${response.orders.length} pending limit order(s) generated while preserving the 15% cash buffer.`,
+      response.orders.length ? "gain" : "warn"
+    );
+  } catch (error) {
+    result.textContent = String(error);
+    showToast("Rebalance failed", String(error), "loss");
+  }
+}
+
+function linePoints(items, key, min, max, width, height) {
+  const range = Math.max(max - min, 1);
+  return items
+    .map((item, index) => {
+      const x = (index / Math.max(items.length - 1, 1)) * width;
+      const y = height - ((item[key] - min) / range) * (height - 34) - 17;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
+function renderMonteCarloResult(payload) {
+  const metrics = document.getElementById("monte-carlo-metrics");
+  const result = document.getElementById("monte-carlo-result");
+  const chart = document.getElementById("monte-carlo-chart");
+  const trajectory = payload.trajectory ?? [];
+
+  metrics.innerHTML = [
+    { title: "Expected Return", value: fmtPercent(payload.expected_annual_return, 1), delta: "1-year simulated", tone: payload.expected_annual_return >= 0 ? "gain" : "loss" },
+    { title: "Sharpe", value: fmtNullable(payload.simulated_sharpe_ratio, 2), delta: `${payload.n_paths} paths`, tone: payload.simulated_sharpe_ratio >= 1 ? "gain" : "neutral" },
+    { title: "VaR 95", value: fmtPercent(payload.var_95, 2), delta: `CVaR ${fmtPercent(payload.cvar_95, 2)}`, tone: "loss" }
+  ]
+    .map(
+      (metric) => `
+        <div class="panel metric-card">
+          <h3>${metric.title}</h3>
+          <div class="metric-value ${metric.tone}">${metric.value}</div>
+          <div class="metric-delta">${metric.delta}</div>
+        </div>
+      `
+    )
+    .join("");
+
+  if (!trajectory.length) {
+    chart.innerHTML = "";
+    result.textContent = "Simulation returned no trajectory.";
+    return;
+  }
+
+  const values = trajectory.flatMap((item) => [item.p5_nav, item.p50_nav, item.p95_nav]);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const width = 720;
+  const height = 260;
+  const p5 = linePoints(trajectory, "p5_nav", min, max, width, height);
+  const p50 = linePoints(trajectory, "p50_nav", min, max, width, height);
+  const p95 = linePoints(trajectory, "p95_nav", min, max, width, height);
+  const band = `${p95} ${p5.split(" ").reverse().join(" ")}`;
+  chart.innerHTML = `
+    <polygon class="simulation-band" points="${band}"></polygon>
+    <polyline class="sparkline-grid" points="0,225 ${width},225"></polyline>
+    <polyline class="simulation-line p95" points="${p95}"></polyline>
+    <polyline class="simulation-line p50" points="${p50}"></polyline>
+    <polyline class="simulation-line p5" points="${p5}"></polyline>
+    <text class="chart-label" x="12" y="24">P95</text>
+    <text class="chart-label" x="12" y="48">P50</text>
+    <text class="chart-label" x="12" y="72">P5</text>
+  `;
+  result.textContent = JSON.stringify(
+    {
+      generated_at: payload.generated_at,
+      symbols: payload.symbols,
+      methodology: payload.methodology
+    },
+    null,
+    2
+  );
+}
+
+async function runMonteCarloSimulation() {
+  const result = document.getElementById("monte-carlo-result");
+  result.textContent = "Running 1,000-path Monte Carlo simulation...";
+
+  const proposedWeights = terminalState.latestOptimization?.targets?.reduce((weights, target) => {
+    weights[target.symbol] = target.recommended_weight;
+    return weights;
+  }, {});
+
+  try {
+    const payload = { n_paths: 1000, horizon_days: 252 };
+    if (proposedWeights && Object.keys(proposedWeights).length) {
+      payload.proposed_weights = proposedWeights;
+    }
+    const response = await fetchJson("/simulate/monte-carlo", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    renderMonteCarloResult(response);
+    const weightNote = payload.proposed_weights ? " using optimized allocation weights" : "";
+    showToast("Monte Carlo complete", `Projected ${response.horizon_days} trading days across ${response.n_paths} paths${weightNote}.`, "gain");
+  } catch (error) {
+    result.textContent = String(error);
+    showToast("Simulation failed", String(error), "loss");
+  }
+}
+
+function renderOptimizationResult(payload) {
+  terminalState.latestOptimization = payload;
+  const metrics = document.getElementById("optimization-metrics");
+  const table = document.getElementById("optimization-table");
+  const result = document.getElementById("optimization-result");
+
+  metrics.innerHTML = [
+    { title: "Return", value: fmtPercent(payload.expected_annual_return, 1), delta: "optimized annual", tone: payload.expected_annual_return >= 0 ? "gain" : "loss" },
+    { title: "Volatility", value: fmtPercent(payload.expected_annual_volatility, 1), delta: "annualized", tone: "" },
+    { title: "VaR 95", value: fmtPercent(payload.var_95, 2), delta: `Sharpe ${fmtNullable(payload.simulated_sharpe_ratio, 2)}`, tone: payload.var_95 >= -0.015 ? "gain" : "loss" }
+  ]
+    .map(
+      (metric) => `
+        <div class="panel metric-card">
+          <h3>${metric.title}</h3>
+          <div class="metric-value ${metric.tone}">${metric.value}</div>
+          <div class="metric-delta">${metric.delta}</div>
+        </div>
+      `
+    )
+    .join("");
+
+  table.innerHTML = payload.targets?.length
+    ? payload.targets
+        .map(
+          (item) => `
+            <tr>
+              <td>${item.symbol}</td>
+              <td><span class="${toneChipClass(item.bucket)}">${roleLabel(item.bucket)}</span></td>
+              <td>${fmtPercent(item.current_weight, 1)}</td>
+              <td>${fmtPercent(item.recommended_weight, 1)}</td>
+              <td class="${item.delta_weight >= 0 ? "gain" : "loss"}">${fmtPercent(item.delta_weight, 1)}</td>
+              <td>${fmtPercent(item.expected_return, 1)}</td>
+            </tr>
+          `
+        )
+        .join("")
+    : emptyRow(6, "No optimized targets returned.");
+
+  result.textContent = JSON.stringify(
+    {
+      generated_at: payload.generated_at,
+      status: payload.status,
+      objective: payload.objective,
+      notes: payload.notes
+    },
+    null,
+    2
+  );
+  applyTerminalFilter(document.getElementById("terminal-filter").value);
+}
+
+async function runAllocationOptimization(apply = false) {
+  const result = document.getElementById("optimization-result");
+  result.textContent = apply ? "Applying optimized allocation to barbell targets..." : "Optimizing allocation...";
+
+  try {
+    const response = await fetchJson(
+      apply ? "/portfolio/optimize-allocation/apply" : "/portfolio/optimize-allocation",
+      { method: "POST" }
+    );
+    renderOptimizationResult(response);
+    if (apply) {
+      renderBarbell(response.barbell);
+      await loadTerminal(false);
+    }
+    showToast(
+      apply ? "Optimized targets applied" : "Optimization complete",
+      `Sharpe ${fmtNullable(response.simulated_sharpe_ratio, 2)}, VaR ${fmtPercent(response.var_95, 2)}.`,
+      response.var_95 >= -0.015 ? "gain" : "warn"
+    );
+  } catch (error) {
+    result.textContent = String(error);
+    showToast("Optimization failed", String(error), "loss");
+  }
+}
+
 function renderEventSummary(summary, generatedAt) {
   const metrics = document.getElementById("event-summary-metrics");
   const note = document.getElementById("event-summary-note");
@@ -481,6 +815,7 @@ function renderPositionRisk(items) {
 }
 
 function renderOrders(orders) {
+  renderPendingOrdersQueue(orders);
   const body = document.getElementById("orders-table");
   if (!orders.length) {
     body.innerHTML = emptyRow(8, "No orders found.");
@@ -712,9 +1047,11 @@ async function runTradingAlgoCommand(event) {
       body: JSON.stringify(payload)
     });
     renderTradingAlgoResult(response);
+    showToast("Trading algo complete", response.summary, response.status === "error" ? "loss" : "gain");
   } catch (error) {
     summary.textContent = "Error";
     result.textContent = String(error);
+    showToast("Trading algo failed", String(error), "loss");
   }
 }
 
@@ -745,9 +1082,11 @@ async function submitOrder(event) {
       body: JSON.stringify(payload)
     });
     result.textContent = JSON.stringify(response, null, 2);
-    await loadTerminal();
+    showToast("Order submitted", `${response.side} ${response.quantity} ${response.symbol} (${response.status}).`, "gain");
+    await loadTerminal(false);
   } catch (error) {
     result.textContent = String(error);
+    showToast("Order failed", String(error), "loss");
   }
 }
 
@@ -762,9 +1101,11 @@ async function cancelOrder(orderId) {
     }
     const payload = await response.json();
     result.textContent = JSON.stringify(payload, null, 2);
-    await loadTerminal();
+    showToast("Order cancelled", `Order ${orderId} cancelled.`, "warn");
+    await loadTerminal(false);
   } catch (error) {
     result.textContent = String(error);
+    showToast("Cancel failed", String(error), "loss");
   }
 }
 
@@ -775,9 +1116,11 @@ async function refreshPortfolioPrices() {
   try {
     const payload = await fetchJson("/portfolio/refresh", { method: "POST" });
     result.textContent = JSON.stringify(payload, null, 2);
+    showToast("Market data refreshed", `${payload.positions_updated ?? 0} position(s) updated.`, "gain");
     await loadTerminal(false);
   } catch (error) {
     result.textContent = String(error);
+    showToast("Refresh failed", String(error), "loss");
   }
 }
 
@@ -805,9 +1148,10 @@ async function loadTerminal(runRefresh = true) {
     }
 
     const snapshot = await fetchJson("/terminal/snapshot");
+    window.__latestSnapshot = snapshot;
 
     renderTerminalControls(snapshot);
-    renderMetrics(snapshot);
+    renderMetrics(snapshot, terminalState.projectedExposure);
     renderHistory(snapshot.history, snapshot.portfolio);
     renderSignals({
       signals: snapshot.signals,
@@ -841,9 +1185,14 @@ async function loadTerminal(runRefresh = true) {
   }
 }
 
+window.populateOrderForm = populateOrderForm;
 document.getElementById("algo-form").addEventListener("submit", runTradingAlgoCommand);
 document.getElementById("order-form").addEventListener("submit", submitOrder);
 document.getElementById("refresh-button").addEventListener("click", refreshPortfolioPrices);
+document.getElementById("rebalance-barbell-button").addEventListener("click", rebalanceBarbellPortfolio);
+document.getElementById("run-monte-carlo-button").addEventListener("click", runMonteCarloSimulation);
+document.getElementById("optimize-allocation-button").addEventListener("click", () => runAllocationOptimization(false));
+document.getElementById("apply-optimized-allocation-button").addEventListener("click", () => runAllocationOptimization(true));
 document.getElementById("terminal-filter").addEventListener("input", (event) => {
   applyTerminalFilter(event.currentTarget.value);
 });

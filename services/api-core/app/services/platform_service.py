@@ -6,7 +6,9 @@ from decimal import Decimal
 import hashlib
 import json
 import logging
+import math
 import numpy as np
+import pandas as pd
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -43,6 +45,7 @@ from app.schemas.admin import (
 from app.schemas.ai import ForecastResponse, RegimeResponse, SignalResponse
 from app.schemas.auth import UserProfile
 from app.schemas.portfolio import (
+    AllocationOptimizationResponse,
     BarbellAllocationItem,
     BarbellAllocationResponse,
     BarbellStrategyConfig,
@@ -54,6 +57,7 @@ from app.schemas.portfolio import (
     RebalanceInstruction,
     RebalanceRequest,
     RebalanceResponse,
+    OptimizationTarget,
 )
 from app.schemas.research import FactorRank, ResearchIdea, SectorRotation
 from app.schemas.risk import (
@@ -67,7 +71,12 @@ from app.schemas.risk import (
 )
 from app.schemas.trading import Fill as FillSchema
 from app.schemas.trading import OrderCreate, OrderResponse
-from app.schemas.terminal import TerminalSnapshotResponse
+from app.schemas.terminal import (
+    MonteCarloSimulationRequest,
+    MonteCarloSimulationResponse,
+    MonteCarloTrajectory,
+    TerminalSnapshotResponse,
+)
 from app.services.quant_service import quant_insights_service
 from trading_algo.strategy.barbell_strategy import (
     BarbellCandidate,
@@ -102,6 +111,10 @@ class IdempotencyConflictError(ValueError):
 
 logger = logging.getLogger(__name__)
 barbell_strategy_engine = BarbellStrategyEngine()
+
+# In-memory override for barbell targets after "Apply Recommended Allocation".
+_ACTIVE_BARBELL_TARGETS: dict[str, dict[str, float]] = {}
+_ACTIVE_BARBELL_META: dict[str, dict[str, str]] = {}
 
 
 class PlatformService:
@@ -278,8 +291,34 @@ class PlatformService:
     def get_barbell_allocation(
         self,
         config: BarbellStrategyConfig | None = None,
+        *,
+        tenant_id: str = "public",
     ) -> BarbellAllocationResponse:
         config = config or BarbellStrategyConfig()
+        active_targets = _ACTIVE_BARBELL_TARGETS.get(tenant_id)
+        if active_targets and not any(
+            value is not None
+            for value in (
+                config.defensive_weight_target,
+                config.opportunistic_weight_target,
+                config.cash_buffer_target,
+            )
+        ):
+            rows = self._position_rows(refresh_market_data=True)
+            current_weights = self._current_weights()
+            candidates = self._build_barbell_candidates(rows, current_weights)
+            meta = _ACTIVE_BARBELL_META.get(tenant_id, {})
+            barbell = self._barbell_response_from_targets(
+                active_targets,
+                candidates=candidates,
+                regime=meta.get("regime", "optimized"),
+                rationale=meta.get(
+                    "rationale",
+                    "Optimized barbell targets applied from the efficient frontier engine.",
+                ),
+            )
+            return self._refresh_barbell_current_weights(barbell)
+
         rows = self._position_rows(refresh_market_data=True)
         overview = self.get_portfolio_overview(refresh_market_data=False)
         regime = self.get_regime()
@@ -381,7 +420,13 @@ class PlatformService:
             rebalance_instructions=rebalance_instructions,
         )
 
-    def rebalance_portfolio(self, payload: RebalanceRequest) -> RebalanceResponse:
+    def rebalance_portfolio(
+        self,
+        payload: RebalanceRequest,
+        *,
+        tenant_id: str = "public",
+        correlation_id: str | None = None,
+    ) -> RebalanceResponse:
         current_weights = self._current_weights()
         instructions: list[RebalanceInstruction] = []
         for target in payload.targets:
@@ -396,9 +441,252 @@ class PlatformService:
                     delta_weight=delta,
                 )
             )
+        orders: list[OrderResponse] = []
+        notes: list[str] = []
+        projected_cash = None
+        projected_cash_weight = None
+        projected_gross_exposure = None
+        projected_net_exposure = None
+        if payload.generate_orders:
+            generated = self._generate_rebalance_orders(
+                instructions=instructions,
+                targets={target.symbol.upper(): target.target_weight for target in payload.targets},
+                cash_buffer_target=payload.cash_buffer_target,
+                min_trade_value=payload.min_trade_value,
+                tenant_id=tenant_id,
+                correlation_id=correlation_id,
+            )
+            orders = generated["orders"]
+            notes = generated["notes"]
+            projected_cash = generated["projected_cash"]
+            projected_cash_weight = generated["projected_cash_weight"]
+            projected_gross_exposure = generated["projected_gross_exposure"]
+            projected_net_exposure = generated["projected_net_exposure"]
         return RebalanceResponse(
             generated_at=datetime.now(timezone.utc).isoformat(),
             instructions=instructions,
+            orders=orders,
+            projected_cash=projected_cash,
+            projected_cash_weight=projected_cash_weight,
+            projected_gross_exposure=projected_gross_exposure,
+            projected_net_exposure=projected_net_exposure,
+            notes=notes,
+        )
+
+    def rebalance_barbell_portfolio(
+        self,
+        *,
+        tenant_id: str = "public",
+        correlation_id: str | None = None,
+        cash_buffer_target: float = 0.15,
+        min_trade_value: float = 500.0,
+    ) -> RebalanceResponse:
+        allocation = self.get_barbell_allocation(
+            BarbellStrategyConfig(cash_buffer_target=cash_buffer_target, min_rebalance_delta=0.01),
+            tenant_id=tenant_id,
+        )
+        targets = {
+            item.symbol.upper(): item.target_weight
+            for item in allocation.allocations
+            if item.symbol != "CASH"
+        }
+        generated = self._generate_rebalance_orders(
+            instructions=allocation.rebalance_instructions,
+            targets=targets,
+            cash_buffer_target=cash_buffer_target,
+            min_trade_value=min_trade_value,
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+        )
+        return RebalanceResponse(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            instructions=allocation.rebalance_instructions,
+            orders=generated["orders"],
+            projected_cash=generated["projected_cash"],
+            projected_cash_weight=generated["projected_cash_weight"],
+            projected_gross_exposure=generated["projected_gross_exposure"],
+            projected_net_exposure=generated["projected_net_exposure"],
+            notes=generated["notes"],
+        )
+
+    def run_monte_carlo_simulation(
+        self,
+        payload: MonteCarloSimulationRequest,
+    ) -> MonteCarloSimulationResponse:
+        from trading_algo.analytics.simulation import run_monte_carlo
+
+        overview = self.get_portfolio_overview(refresh_market_data=False)
+        rows = self._position_rows(refresh_market_data=False)
+        returns = self._portfolio_return_frame(rows)
+        symbols = list(returns.columns)
+        if not symbols:
+            symbols = [row.symbol for row in rows] or ["CASH"]
+            returns = self._synthetic_return_frame(symbols)
+
+        weights = self._weights_for_symbols(symbols, rows, payload.proposed_weights)
+        np.random.seed(42)
+        paths = run_monte_carlo(
+            weights=weights,
+            returns=returns,
+            n_simulations=payload.n_paths,
+            timeframe=payload.horizon_days,
+            block_size=20,
+            use_stochastic_vol=True,
+            vol_kappa=0.15,
+            vol_theta=1.0,
+            vol_sigma=0.25,
+        )
+        nav_paths = (paths / 100.0) * max(float(overview.nav), 1.0)
+        trajectory = [
+            MonteCarloTrajectory(
+                day=index + 1,
+                p5_nav=round(float(np.percentile(nav_paths[index, :], 5)), 2),
+                p50_nav=round(float(np.percentile(nav_paths[index, :], 50)), 2),
+                p95_nav=round(float(np.percentile(nav_paths[index, :], 95)), 2),
+            )
+            for index in range(nav_paths.shape[0])
+        ]
+
+        final_returns = (nav_paths[-1, :] / max(float(overview.nav), 1.0)) - 1.0
+        var_95 = float(np.percentile(final_returns, 5))
+        tail = final_returns[final_returns <= var_95]
+        daily_returns = (nav_paths[1:, :] / np.maximum(nav_paths[:-1, :], 1e-9)) - 1.0
+        mean_daily = float(np.mean(daily_returns))
+        std_daily = float(np.std(daily_returns))
+        expected_return = float(np.mean(final_returns))
+        sharpe = ((mean_daily * 252) / (std_daily * math.sqrt(252))) if std_daily > 0 else 0.0
+
+        return MonteCarloSimulationResponse(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            n_paths=payload.n_paths,
+            horizon_days=payload.horizon_days,
+            nav=round(float(overview.nav), 2),
+            expected_annual_return=round(expected_return, 4),
+            simulated_sharpe_ratio=round(float(sharpe), 4),
+            var_95=round(var_95, 4),
+            cvar_95=round(float(tail.mean()) if len(tail) else var_95, 4),
+            trajectory=trajectory,
+            symbols=symbols,
+            methodology="trading_algo.analytics.simulation.run_monte_carlo using 20-day volatility, beta-aware portfolio weights and historical/fallback correlations.",
+        )
+
+    def optimize_barbell_allocation(
+        self,
+        apply_to_barbell: bool = False,
+        *,
+        tenant_id: str = "public",
+    ) -> AllocationOptimizationResponse:
+        overview = self.get_portfolio_overview(refresh_market_data=False)
+        rows = self._position_rows(refresh_market_data=False)
+        current_weights = self._current_weights()
+        candidates = self._build_barbell_candidates(rows, current_weights)
+        selected = sorted(
+            candidates,
+            key=lambda item: (
+                item.confidence_score * 0.35
+                + item.buy_probability * 0.35
+                + max(item.expected_return, 0.0) * 2.0
+                + item.liquidity_score * 0.10
+            ),
+            reverse=True,
+        )[:8]
+        symbols = [candidate.symbol for candidate in selected]
+        returns = self._portfolio_return_frame(rows, symbols=symbols)
+        if returns.empty:
+            returns = self._synthetic_return_frame(symbols)
+        returns = returns.reindex(columns=symbols).fillna(0.0)
+
+        annual_returns = np.array([max(candidate.expected_return, 0.01) for candidate in selected])
+        annual_cov = returns.cov().fillna(0.0).to_numpy() * 252
+        if not np.any(annual_cov):
+            annual_vols = np.array([max(0.08, 1.0 - candidate.volatility_score) for candidate in selected])
+            corr = np.full((len(symbols), len(symbols)), 0.35)
+            np.fill_diagonal(corr, 1.0)
+            annual_cov = np.outer(annual_vols, annual_vols) * corr
+
+        cash_weight = 0.15
+        risky_weight = 1.0 - cash_weight
+        rng = np.random.default_rng(123)
+        best: dict[str, object] | None = None
+        best_relaxed: dict[str, object] | None = None
+        for _ in range(5000):
+            risky = rng.dirichlet(np.ones(len(symbols))) * risky_weight
+            ret = float(risky @ annual_returns + cash_weight * 0.02)
+            vol = float(math.sqrt(max(risky @ annual_cov @ risky, 1e-12)))
+            sharpe = (ret - 0.02) / vol if vol > 0 else 0.0
+            var_95 = ret - 1.65 * vol
+            cvar_95 = ret - 2.06 * vol
+            item = {
+                "weights": risky,
+                "ret": ret,
+                "vol": vol,
+                "sharpe": sharpe,
+                "var_95": var_95,
+                "cvar_95": cvar_95,
+            }
+            if best_relaxed is None or float(item["sharpe"]) > float(best_relaxed["sharpe"]):
+                best_relaxed = item
+            if var_95 >= -0.015 and (best is None or sharpe > float(best["sharpe"])):
+                best = item
+
+        notes: list[str] = []
+        status = "ok"
+        if best is None:
+            best = best_relaxed
+            status = "relaxed_var_constraint"
+            notes.append("No sampled portfolio satisfied VaR >= -1.5%; returning the best Sharpe candidate.")
+
+        assert best is not None
+        weights = np.array(best["weights"], dtype=float)
+        optimized_targets = {
+            symbol: round(float(weight), 4)
+            for symbol, weight in zip(symbols, weights, strict=True)
+            if weight >= 0.0025
+        }
+        optimized_targets["CASH"] = cash_weight
+        barbell = self._barbell_response_from_targets(
+            optimized_targets,
+            candidates=selected,
+            regime="optimized",
+            rationale=(
+                "Markowitz max-Sharpe posture with a 15% cash reserve and VaR guardrail. "
+                "Use Apply Recommended Allocation to make these the visible terminal targets."
+            ),
+        )
+        targets = [
+            OptimizationTarget(
+                symbol=candidate.symbol,
+                current_weight=round(float(current_weights.get(candidate.symbol, 0.0)), 4),
+                recommended_weight=round(float(optimized_targets.get(candidate.symbol, 0.0)), 4),
+                delta_weight=round(float(optimized_targets.get(candidate.symbol, 0.0)) - float(current_weights.get(candidate.symbol, 0.0)), 4),
+                expected_return=round(float(candidate.expected_return), 4),
+                volatility=round(float(max(0.08, 1.0 - candidate.volatility_score)), 4),
+                bucket=candidate.bucket,
+            )
+            for candidate in selected
+            if candidate.symbol in optimized_targets
+        ]
+        if apply_to_barbell:
+            _ACTIVE_BARBELL_TARGETS[tenant_id] = optimized_targets
+            _ACTIVE_BARBELL_META[tenant_id] = {
+                "regime": "optimized",
+                "rationale": barbell.rationale,
+            }
+            notes.append("Optimized targets persisted as the active barbell posture for this terminal session.")
+
+        return AllocationOptimizationResponse(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            status=status,
+            objective="maximize_sharpe_with_var_guardrail",
+            expected_annual_return=round(float(best["ret"]), 4),
+            expected_annual_volatility=round(float(best["vol"]), 4),
+            simulated_sharpe_ratio=round(float(best["sharpe"]), 4),
+            var_95=round(float(best["var_95"]), 4),
+            cvar_95=round(float(best["cvar_95"]), 4),
+            cash_buffer_weight=cash_weight,
+            targets=targets,
+            barbell=barbell,
+            notes=notes,
         )
 
     def create_order(
@@ -802,6 +1090,285 @@ class PlatformService:
             if delivery_status in summary:
                 summary[delivery_status] = int(count)
         return DomainEventSummary(**summary)
+
+    def _generate_rebalance_orders(
+        self,
+        *,
+        instructions: list[RebalanceInstruction],
+        targets: dict[str, float],
+        cash_buffer_target: float,
+        min_trade_value: float,
+        tenant_id: str,
+        correlation_id: str | None,
+    ) -> dict[str, object]:
+        overview = self.get_portfolio_overview(refresh_market_data=False)
+        rows = self._position_rows(refresh_market_data=False)
+        row_map = {row.symbol: row for row in rows}
+        price_map = {row.symbol: max(float(row.market_price), 0.01) for row in rows}
+        generated_orders: list[OrderResponse] = []
+        notes: list[str] = []
+
+        required_cash = max(float(overview.nav) * cash_buffer_target, 0.0)
+        sells = [item for item in instructions if item.action.upper() == "SELL"]
+        buys = [item for item in instructions if item.action.upper() == "BUY"]
+        sell_notional = 0.0
+
+        for instruction in sorted(sells, key=lambda item: abs(item.delta_weight), reverse=True):
+            row = row_map.get(instruction.symbol)
+            if not row:
+                notes.append(f"Skipped SELL {instruction.symbol}: no current position.")
+                continue
+            price = price_map.get(instruction.symbol, max(row.market_price, 0.01))
+            notional = min(abs(float(instruction.delta_weight)) * float(overview.nav), row.quantity * price)
+            if notional < min_trade_value:
+                notes.append(f"Skipped SELL {instruction.symbol}: trade value below threshold.")
+                continue
+            quantity = max(round(notional / price, 4), 0.0001)
+            order = self.create_order(
+                OrderCreate(
+                    symbol=instruction.symbol,
+                    side="SELL",
+                    order_type="limit",
+                    quantity=quantity,
+                    limit_price=round(price * 0.995, 2),
+                    broker="paper",
+                    strategy_tag="barbell_rebalance",
+                ),
+                tenant_id=tenant_id,
+                correlation_id=correlation_id,
+            ).order
+            generated_orders.append(order)
+            sell_notional += notional
+
+        buy_budget = max(0.0, float(overview.cash) + sell_notional - required_cash)
+        planned_buys = [
+            (instruction, max(float(instruction.delta_weight), 0.0) * float(overview.nav))
+            for instruction in buys
+        ]
+        total_requested_buy = sum(value for _, value in planned_buys)
+        if total_requested_buy > buy_budget and total_requested_buy > 0:
+            notes.append(
+                f"BUY orders scaled to preserve {cash_buffer_target:.0%} cash buffer "
+                f"(${buy_budget:,.0f} budget vs ${total_requested_buy:,.0f} requested)."
+            )
+        scale = min(1.0, buy_budget / total_requested_buy) if total_requested_buy > 0 else 0.0
+        buy_notional = 0.0
+
+        for instruction, requested_notional in sorted(planned_buys, key=lambda item: item[1], reverse=True):
+            notional = requested_notional * scale
+            if notional < min_trade_value:
+                notes.append(f"Skipped BUY {instruction.symbol}: trade value below threshold or cash buffer constraint.")
+                continue
+            price = self._reference_price_for_symbol(instruction.symbol, price_map)
+            quantity = max(round(notional / price, 4), 0.0001)
+            order = self.create_order(
+                OrderCreate(
+                    symbol=instruction.symbol,
+                    side="BUY",
+                    order_type="limit",
+                    quantity=quantity,
+                    limit_price=round(price * 1.005, 2),
+                    broker="paper",
+                    strategy_tag="barbell_rebalance",
+                ),
+                tenant_id=tenant_id,
+                correlation_id=correlation_id,
+            ).order
+            generated_orders.append(order)
+            buy_notional += notional
+
+        projected_cash = float(overview.cash) + sell_notional - buy_notional
+        projected_exposure = max(float(overview.nav) - projected_cash, 0.0)
+        if not generated_orders:
+            notes.append("No rebalance orders generated; targets are within threshold or cash buffer blocks buys.")
+        return {
+            "orders": generated_orders,
+            "notes": notes,
+            "projected_cash": round(projected_cash, 2),
+            "projected_cash_weight": round(projected_cash / float(overview.nav), 4) if overview.nav else None,
+            "projected_gross_exposure": round(projected_exposure / float(overview.nav), 4) if overview.nav else None,
+            "projected_net_exposure": round(projected_exposure / float(overview.nav), 4) if overview.nav else None,
+            "targets": targets,
+        }
+
+    def _portfolio_return_frame(
+        self,
+        rows: list[PositionView],
+        symbols: list[str] | None = None,
+    ) -> pd.DataFrame:
+        row_map = {row.symbol: row for row in rows}
+        requested = symbols or [row.symbol for row in rows]
+        returns_map: dict[str, pd.Series] = {}
+        for symbol in requested:
+            row = row_map.get(symbol)
+            try:
+                returns = quant_insights_service._returns_series(
+                    symbol,
+                    period="1y",
+                    market_data_symbol=row.market_data_symbol if row else symbol,
+                    market_data_enabled=row.market_data_enabled if row else True,
+                )
+            except Exception:
+                returns = pd.Series(dtype=float)
+            if not returns.empty:
+                returns_map[symbol] = returns.tail(252)
+        if not returns_map:
+            return pd.DataFrame()
+        frame = pd.DataFrame(returns_map).dropna(how="all").ffill().dropna()
+        return frame.tail(252)
+
+    def _synthetic_return_frame(self, symbols: list[str], periods: int = 252) -> pd.DataFrame:
+        candidates = {item["symbol"]: item for item in self._barbell_universe_catalog()}
+        rng = np.random.default_rng(99)
+        vols = np.array([
+            max(0.08, 1.0 - float(candidates.get(symbol, {}).get("volatility_score", 0.70)))
+            for symbol in symbols
+        ])
+        annual_returns = np.array([
+            float(candidates.get(symbol, {}).get("expected_return", 0.05))
+            for symbol in symbols
+        ])
+        corr = np.full((len(symbols), len(symbols)), 0.35)
+        np.fill_diagonal(corr, 1.0)
+        daily_cov = np.outer(vols / math.sqrt(252), vols / math.sqrt(252)) * corr
+        daily_mean = annual_returns / 252
+        data = rng.multivariate_normal(daily_mean, daily_cov, size=periods)
+        return pd.DataFrame(data, columns=symbols)
+
+    @staticmethod
+    def _weights_for_symbols(
+        symbols: list[str],
+        rows: list[PositionView],
+        proposed_weights: dict[str, float] | None = None,
+    ) -> np.ndarray:
+        if proposed_weights:
+            weights = np.array([max(float(proposed_weights.get(symbol, 0.0)), 0.0) for symbol in symbols])
+        else:
+            total = sum(max(row.market_value, 0.0) for row in rows if row.symbol in symbols)
+            weights = np.array([
+                (max(next((row.market_value for row in rows if row.symbol == symbol), 0.0), 0.0) / total)
+                if total > 0
+                else 1.0 / len(symbols)
+                for symbol in symbols
+            ])
+        total_weight = float(weights.sum())
+        if total_weight <= 0:
+            return np.array([1.0 / len(symbols)] * len(symbols))
+        return weights / total_weight
+
+    def _refresh_barbell_current_weights(self, barbell: BarbellAllocationResponse) -> BarbellAllocationResponse:
+        overview = self.get_portfolio_overview(refresh_market_data=False)
+        current_weights = self._current_weights()
+        current_cash_weight = (overview.cash / overview.nav) if overview.nav > 0 else 1.0
+        allocations: list[BarbellAllocationItem] = []
+        for item in barbell.allocations:
+            current_weight = current_cash_weight if item.symbol == "CASH" else current_weights.get(item.symbol, 0.0)
+            allocations.append(
+                item.model_copy(
+                    update={
+                        "current_weight": round(current_weight, 4),
+                        "delta_weight": round(item.target_weight - current_weight, 4),
+                    }
+                )
+            )
+        rebalance_instructions = [
+            RebalanceInstruction(
+                symbol=item.symbol,
+                action="BUY" if item.delta_weight > 0 else "SELL",
+                delta_weight=item.delta_weight,
+            )
+            for item in allocations
+            if item.symbol != "CASH" and abs(item.delta_weight) >= 0.01
+        ]
+        return barbell.model_copy(
+            update={
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "allocations": allocations,
+                "rebalance_instructions": rebalance_instructions,
+            }
+        )
+
+    def _barbell_response_from_targets(
+        self,
+        targets: dict[str, float],
+        *,
+        candidates: list[BarbellCandidate],
+        regime: str,
+        rationale: str,
+    ) -> BarbellAllocationResponse:
+        overview = self.get_portfolio_overview(refresh_market_data=False)
+        current_weights = self._current_weights()
+        candidate_map = {candidate.symbol: candidate for candidate in candidates}
+        allocations: list[BarbellAllocationItem] = []
+        for symbol, target_weight in targets.items():
+            if symbol == "CASH":
+                current_weight = (overview.cash / overview.nav) if overview.nav > 0 else 1.0
+                allocations.append(
+                    BarbellAllocationItem(
+                        symbol="CASH",
+                        bucket="cash",
+                        role="liquidity_reserve",
+                        current_weight=round(current_weight, 4),
+                        target_weight=round(target_weight, 4),
+                        delta_weight=round(target_weight - current_weight, 4),
+                        buy_probability=0.5,
+                        expected_return=0.0,
+                        confidence_score=1.0,
+                        rationale="Cash reserve preserves the strategic liquidity guardrail.",
+                    )
+                )
+                continue
+            candidate = candidate_map[symbol]
+            current_weight = current_weights.get(symbol, 0.0)
+            allocations.append(
+                BarbellAllocationItem(
+                    symbol=symbol,
+                    bucket=candidate.bucket,
+                    role=candidate.role,
+                    current_weight=round(current_weight, 4),
+                    target_weight=round(target_weight, 4),
+                    delta_weight=round(target_weight - current_weight, 4),
+                    buy_probability=round(candidate.buy_probability, 4),
+                    expected_return=round(candidate.expected_return, 4),
+                    confidence_score=round(candidate.confidence_score, 4),
+                    rationale=candidate.rationale,
+                )
+            )
+        rebalance_instructions = [
+            RebalanceInstruction(
+                symbol=item.symbol,
+                action="BUY" if item.delta_weight > 0 else "SELL",
+                delta_weight=item.delta_weight,
+            )
+            for item in allocations
+            if item.symbol != "CASH" and abs(item.delta_weight) >= 0.01
+        ]
+        return BarbellAllocationResponse(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            regime=regime,
+            defensive_weight=round(
+                sum(item.target_weight for item in allocations if item.bucket == "defensive"), 4
+            ),
+            opportunistic_weight=round(
+                sum(item.target_weight for item in allocations if item.bucket == "opportunistic"), 4
+            ),
+            cash_buffer_weight=round(float(targets.get("CASH", 0.0)), 4),
+            rationale=rationale,
+            allocations=sorted(allocations, key=lambda item: (item.bucket, -item.target_weight, item.symbol)),
+            rebalance_instructions=rebalance_instructions,
+        )
+
+    def _reference_price_for_symbol(self, symbol: str, price_map: dict[str, float]) -> float:
+        if symbol in price_map and price_map[symbol] > 0:
+            return price_map[symbol]
+        symbol_row = self.db.scalar(select(Symbol).where(Symbol.ticker == symbol))
+        if symbol_row:
+            last_price = self.db.scalar(select(func.max(Position.market_price)).where(Position.symbol_id == symbol_row.id))
+            if last_price:
+                return max(float(last_price), 0.01)
+        catalog = {item["symbol"]: item for item in self._barbell_universe_catalog()}
+        expected_return = float(catalog.get(symbol, {}).get("expected_return", 0.05))
+        return round(100.0 * (1 + expected_return), 2)
 
     def _position_query(self) -> Select[tuple[Position]]:
         return select(Position).options(joinedload(Position.symbol), joinedload(Position.account))
