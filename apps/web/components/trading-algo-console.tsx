@@ -11,7 +11,7 @@ import type {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
 
-const commandOptions: TradingAlgoCommand[] = ["analyze", "compare", "screen"];
+const commandOptions: TradingAlgoCommand[] = ["analyze", "compare", "screen", "simulate"];
 const periodOptions = ["6mo", "1y", "2y", "5y"];
 
 const initialResult: TradingAlgoCommandResponse = {
@@ -76,6 +76,7 @@ export function TradingAlgoConsole() {
   const [maxSymbols, setMaxSymbols] = useState(8);
   const [result, setResult] = useState<TradingAlgoCommandResponse>(initialResult);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
 
   const visibleSymbols = useMemo(
     () =>
@@ -110,7 +111,9 @@ export function TradingAlgoConsole() {
         throw new Error(`API request failed: ${response.status}`);
       }
 
-      setResult((await response.json()) as TradingAlgoCommandResponse);
+      const payload = (await response.json()) as TradingAlgoCommandResponse;
+      setResult(payload);
+      setSelectedSymbol(payload.analyses[0]?.symbol ?? null);
     } catch (error) {
       setResult({
         command,
@@ -120,10 +123,13 @@ export function TradingAlgoConsole() {
         analyses: [],
         errors: [error instanceof Error ? error.message : "Unknown error"]
       });
+      setSelectedSymbol(null);
     } finally {
       setIsLoading(false);
     }
   }
+
+  const selectedAnalysis = result.analyses.find((analysis) => analysis.symbol === selectedSymbol) ?? result.analyses[0];
 
   return (
     <section className="panel p-6">
@@ -212,12 +218,15 @@ export function TradingAlgoConsole() {
       </div>
 
       <div className="mt-5 overflow-hidden rounded-xl border border-line">
-        <table className="w-full min-w-[920px] text-left text-sm">
+        <table className="w-full min-w-[1120px] text-left text-sm">
           <thead className="bg-black/20 text-slate-400">
             <tr>
               <th className="px-4 py-3 font-medium">Symbol</th>
               <th className="px-4 py-3 font-medium">Trend</th>
               <th className="px-4 py-3 font-medium">Rec.</th>
+              <th className="px-4 py-3 font-medium">Conf.</th>
+              <th className="px-4 py-3 font-medium">Size</th>
+              <th className="px-4 py-3 font-medium">Backtest</th>
               <th className="px-4 py-3 font-medium">Price</th>
               <th className="px-4 py-3 font-medium">Day</th>
               <th className="px-4 py-3 font-medium">Total</th>
@@ -231,13 +240,24 @@ export function TradingAlgoConsole() {
             {result.analyses.length ? (
               result.analyses.map((analysis) => (
                 <tr key={analysis.symbol} className="border-t border-line/70">
-                  <td className="px-4 py-3 font-mono text-white">{analysis.symbol}</td>
+                  <td className="px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSymbol(analysis.symbol)}
+                      className="font-mono text-white underline-offset-4 hover:underline"
+                    >
+                      {analysis.symbol}
+                    </button>
+                  </td>
                   <td className="px-4 py-3">
                     <span className={`rounded-md border px-2 py-1 text-xs ${toneClass(analysis.trend)}`}>
                       {analysis.trend}
                     </span>
                   </td>
                   <td className={`px-4 py-3 ${rowTone(analysis)}`}>{analysis.recommendation}</td>
+                  <td className="px-4 py-3 text-slate-300">{formatPercent(analysis.diagnostics?.confidence_score, 0)}</td>
+                  <td className="px-4 py-3 text-slate-300">{formatPercent(analysis.sizing?.recommended_weight, 1)}</td>
+                  <td className="px-4 py-3 text-slate-300">{formatPercent(analysis.backtest?.pnl, 1)}</td>
                   <td className="px-4 py-3 text-slate-300">{formatCurrency(analysis.latest_price)}</td>
                   <td className="px-4 py-3 text-slate-300">{formatPercent(analysis.daily_return, 2)}</td>
                   <td className="px-4 py-3 text-slate-300">{formatPercent(analysis.total_return, 1)}</td>
@@ -249,7 +269,7 @@ export function TradingAlgoConsole() {
               ))
             ) : (
               <tr>
-                <td className="px-4 py-8 text-center text-slate-500" colSpan={10}>
+                <td className="px-4 py-8 text-center text-slate-500" colSpan={13}>
                   No results
                 </td>
               </tr>
@@ -257,6 +277,82 @@ export function TradingAlgoConsole() {
           </tbody>
         </table>
       </div>
+
+      {selectedAnalysis ? (
+        <div className="mt-5 grid gap-4 xl:grid-cols-[1fr_1fr]">
+          <div className="rounded-xl border border-line bg-black/20 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="metric-label">AI Explanation</p>
+              <span className={`rounded-md border px-2 py-1 text-xs ${toneClass(selectedAnalysis.diagnostics?.model_stale ? "error" : "ok")}`}>
+                {selectedAnalysis.diagnostics?.model_stale ? "stale" : "fresh"}
+              </span>
+            </div>
+            <p className="mt-3 font-mono text-sm text-slate-300">
+              {selectedAnalysis.diagnostics?.model_version ?? "model unavailable"}
+            </p>
+            <div className="mt-4 space-y-3">
+              {(selectedAnalysis.feature_importance ?? []).slice(0, 4).map((feature) => (
+                <div key={feature.feature} className="rounded-lg border border-line bg-black/20 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm text-white">{feature.feature}</p>
+                    <p className={feature.contribution >= 0 ? "text-gain" : "text-loss"}>
+                      {formatPercent(feature.contribution, 1)}
+                    </p>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-400">{feature.explanation}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-line bg-black/20 p-4">
+            <p className="metric-label">Prediction Bands & Sizing</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div>
+                <p className="text-xs text-slate-500">Kelly cap</p>
+                <p className="mt-1 font-mono text-xl text-white">
+                  {formatPercent(selectedAnalysis.sizing?.capped_kelly_fraction, 1)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Stop</p>
+                <p className="mt-1 font-mono text-xl text-loss">{formatPercent(selectedAnalysis.sizing?.stop_loss, 1)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Take profit</p>
+                <p className="mt-1 font-mono text-xl text-gain">
+                  {formatPercent(selectedAnalysis.sizing?.take_profit, 1)}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 overflow-hidden rounded-lg border border-line">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-black/20 text-slate-400">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Horizon</th>
+                    <th className="px-3 py-2 font-medium">Median</th>
+                    <th className="px-3 py-2 font-medium">95% Range</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(selectedAnalysis.prediction_bands ?? []).map((band) => {
+                    const interval95 = band.intervals.find((interval) => interval.confidence === 0.95);
+                    return (
+                      <tr key={band.horizon_days} className="border-t border-line/70">
+                        <td className="px-3 py-2 text-slate-300">{band.horizon_days}D</td>
+                        <td className="px-3 py-2 text-slate-300">{formatCurrency(band.median_target)}</td>
+                        <td className="px-3 py-2 text-slate-300">
+                          {interval95 ? `${formatCurrency(interval95.low)} / ${formatCurrency(interval95.high)}` : "n/a"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -45,6 +45,67 @@ class TradingAlgoCommandRequest(BaseModel):
     max_symbols: int = 8
 
 
+class TradingAlgoFeatureContribution(BaseModel):
+    feature: str
+    contribution: float
+    direction: str
+    explanation: str
+
+
+class TradingAlgoPredictionInterval(BaseModel):
+    confidence: float
+    low: float
+    high: float
+
+
+class TradingAlgoPredictionBand(BaseModel):
+    horizon_days: int
+    median_target: float
+    expected_return: float
+    intervals: list[TradingAlgoPredictionInterval]
+
+
+class TradingAlgoModelDiagnostics(BaseModel):
+    model_version: str
+    feature_set_version: str
+    trained_at: Optional[str]
+    inference_at: str
+    confidence_score: float
+    directional_accuracy_30d: Optional[float]
+    directional_accuracy_90d: Optional[float]
+    hit_rate: Optional[float]
+    mae: Optional[float]
+    rmse: Optional[float]
+    signal_sharpe_30d: Optional[float]
+    signal_sharpe_90d: Optional[float]
+    model_stale: bool
+    data_drift_detected: bool
+    concept_drift_detected: bool
+    market_data_stale: bool
+
+
+class TradingAlgoPositionSizing(BaseModel):
+    buy_probability: float
+    model_edge: float
+    kelly_fraction: float
+    capped_kelly_fraction: float
+    volatility_adjusted_weight: float
+    recommended_weight: float
+    recommended_notional: float
+    stop_loss: float
+    take_profit: float
+
+
+class TradingAlgoBacktestSummary(BaseModel):
+    lookback_days: int
+    pnl: float
+    max_drawdown: float
+    win_loss_ratio: float
+    trade_count: int
+    exposure_time: float
+    benchmark_return: float
+
+
 class TradingAlgoSymbolAnalysis(BaseModel):
     symbol: str
     period: str
@@ -62,6 +123,11 @@ class TradingAlgoSymbolAnalysis(BaseModel):
     sma_50: Optional[float]
     trend: str
     recommendation: str
+    diagnostics: Optional[TradingAlgoModelDiagnostics] = None
+    feature_importance: list[TradingAlgoFeatureContribution] = Field(default_factory=list)
+    prediction_bands: list[TradingAlgoPredictionBand] = Field(default_factory=list)
+    sizing: Optional[TradingAlgoPositionSizing] = None
+    backtest: Optional[TradingAlgoBacktestSummary] = None
 
 
 class TradingAlgoCommandResponse(BaseModel):

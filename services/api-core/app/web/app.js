@@ -13,7 +13,8 @@ const terminalState = {
   filter: "",
   latestOptimization: null,
   projectedExposure: null,
-  activePendingOrderId: null
+  activePendingOrderId: null,
+  latestAlgoAnalyses: []
 };
 
 function fmtAge(value) {
@@ -978,6 +979,7 @@ function renderTradingAlgoResult(payload) {
   const summary = document.getElementById("algo-summary");
   const result = document.getElementById("algo-result");
   const table = document.getElementById("algo-table");
+  terminalState.latestAlgoAnalyses = payload.analyses ?? [];
 
   summary.textContent = `${payload.status} / ${payload.command}`;
   result.textContent = JSON.stringify(
@@ -991,7 +993,7 @@ function renderTradingAlgoResult(payload) {
   );
 
   if (!payload.analyses?.length) {
-    table.innerHTML = emptyRow(10, "No trading-algo results returned.");
+    table.innerHTML = emptyRow(15, "No trading-algo results returned.");
     return;
   }
 
@@ -1002,19 +1004,155 @@ function renderTradingAlgoResult(payload) {
           <td>${item.symbol}</td>
           <td><span class="${toneChipClass(item.trend)}">${roleLabel(item.trend)}</span></td>
           <td><span class="${toneChipClass(item.recommendation)}">${roleLabel(item.recommendation)}</span></td>
-          <td>${item.latest_price === null ? "--" : fmtCurrency(item.latest_price)}</td>
-          <td class="${(item.daily_return ?? 0) >= 0 ? "gain" : "loss"}">${item.daily_return === null ? "--" : fmtPercent(item.daily_return, 2)}</td>
-          <td class="${(item.total_return ?? 0) >= 0 ? "gain" : "loss"}">${item.total_return === null ? "--" : fmtPercent(item.total_return, 1)}</td>
-          <td>${item.volatility_20d === null ? "--" : fmtPercent(item.volatility_20d, 1)}</td>
+          <td>${item.diagnostics?.model_version ?? "--"}</td>
+          <td>${item.diagnostics?.confidence_score === undefined || item.diagnostics?.confidence_score === null ? "--" : fmtPercent(item.diagnostics.confidence_score, 0)}</td>
+          <td>${item.sizing?.recommended_weight === undefined || item.sizing?.recommended_weight === null ? "--" : fmtPercent(item.sizing.recommended_weight, 1)}</td>
+          <td>${item.backtest?.pnl === undefined || item.backtest?.pnl === null ? "--" : fmtPercent(item.backtest.pnl, 1)}</td>
+          <td>${item.latest_price == null ? "--" : fmtCurrency(item.latest_price)}</td>
+          <td class="${(item.daily_return ?? 0) >= 0 ? "gain" : "loss"}">${item.daily_return == null ? "--" : fmtPercent(item.daily_return, 2)}</td>
+          <td class="${(item.total_return ?? 0) >= 0 ? "gain" : "loss"}">${item.total_return == null ? "--" : fmtPercent(item.total_return, 1)}</td>
+          <td>${item.volatility_20d == null ? "--" : fmtPercent(item.volatility_20d, 1)}</td>
           <td>${fmtNullable(item.sharpe_ratio, 2)}</td>
-          <td class="loss">${item.var_95 === null ? "--" : fmtPercent(item.var_95, 2)}</td>
+          <td class="loss">${item.var_95 == null ? "--" : fmtPercent(item.var_95, 2)}</td>
           <td>${fmtNullable(item.rsi, 1)}</td>
+          <td>
+            <button class="link-button" type="button" onclick="openTradingAlgoExplanation('${item.symbol}')">
+              Explain
+            </button>
+          </td>
         </tr>
       `
     )
     .join("");
 
   applyTerminalFilter(document.getElementById("terminal-filter").value);
+}
+
+function renderExplanationMetric(title, value, tone = "") {
+  return `
+    <div class="explanation-card">
+      <div class="micro">${title}</div>
+      <div class="explanation-value ${tone}">${value}</div>
+    </div>
+  `;
+}
+
+function openTradingAlgoExplanation(symbol) {
+  const item = terminalState.latestAlgoAnalyses.find((analysis) => analysis.symbol === symbol);
+  if (!item) {
+    return;
+  }
+
+  const modal = document.getElementById("algo-explanation-modal");
+  const title = document.getElementById("algo-explanation-title");
+  const body = document.getElementById("algo-explanation-body");
+  const diagnostics = item.diagnostics ?? {};
+  const sizing = item.sizing ?? {};
+  const backtest = item.backtest ?? {};
+  const bands = item.prediction_bands ?? [];
+  const features = item.feature_importance ?? [];
+  const warnings = [
+    diagnostics.model_stale ? "Model stale" : null,
+    diagnostics.market_data_stale ? "Market data stale" : null,
+    diagnostics.data_drift_detected ? "Data drift" : null,
+    diagnostics.concept_drift_detected ? "Concept drift" : null
+  ].filter(Boolean);
+
+  title.textContent = `${item.symbol} model details`;
+  body.innerHTML = `
+    <div class="explanation-section">
+      <h3>Diagnostics</h3>
+      <div class="metrics explanation-metrics">
+        ${renderExplanationMetric("Confidence", diagnostics.confidence_score === undefined ? "--" : fmtPercent(diagnostics.confidence_score, 0), diagnostics.confidence_score >= 0.65 ? "gain" : "")}
+        ${renderExplanationMetric("Accuracy 30D", diagnostics.directional_accuracy_30d === undefined || diagnostics.directional_accuracy_30d === null ? "--" : fmtPercent(diagnostics.directional_accuracy_30d, 0))}
+        ${renderExplanationMetric("Accuracy 90D", diagnostics.directional_accuracy_90d === undefined || diagnostics.directional_accuracy_90d === null ? "--" : fmtPercent(diagnostics.directional_accuracy_90d, 0))}
+        ${renderExplanationMetric("Signal Sharpe 90D", fmtNullable(diagnostics.signal_sharpe_90d, 2))}
+      </div>
+      <p class="metric-delta">Model ${diagnostics.model_version ?? "--"} / features ${diagnostics.feature_set_version ?? "--"}</p>
+      <p class="metric-delta">Warnings: ${warnings.length ? warnings.join(", ") : "none"}</p>
+    </div>
+    <div class="explanation-section">
+      <h3>Feature Importance</h3>
+      <div class="stack">
+        ${
+          features.length
+            ? features
+                .map(
+                  (feature) => `
+                    <div class="feature-row">
+                      <div>
+                        <strong>${feature.feature}</strong>
+                        <span>${feature.explanation}</span>
+                      </div>
+                      <span class="${feature.contribution >= 0 ? "gain" : "loss"}">${fmtPercent(feature.contribution, 1)}</span>
+                    </div>
+                  `
+                )
+                .join("")
+            : `<div class="empty-state">No explanation available.</div>`
+        }
+      </div>
+    </div>
+    <div class="explanation-section">
+      <h3>Prediction Bands</h3>
+      <div class="table-wrap compact">
+        <table>
+          <thead>
+            <tr>
+              <th>Horizon</th>
+              <th>Median</th>
+              <th>50%</th>
+              <th>80%</th>
+              <th>95%</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              bands.length
+                ? bands
+                    .map((band) => {
+                      const intervals = new Map((band.intervals ?? []).map((interval) => [String(interval.confidence), interval]));
+                      const band50 = intervals.get("0.5");
+                      const band80 = intervals.get("0.8");
+                      const band95 = intervals.get("0.95");
+                      return `
+                        <tr>
+                          <td>${band.horizon_days}D</td>
+                          <td>${fmtCurrency(band.median_target)}</td>
+                          <td>${band50 ? `${fmtCurrency(band50.low)} / ${fmtCurrency(band50.high)}` : "--"}</td>
+                          <td>${band80 ? `${fmtCurrency(band80.low)} / ${fmtCurrency(band80.high)}` : "--"}</td>
+                          <td>${band95 ? `${fmtCurrency(band95.low)} / ${fmtCurrency(band95.high)}` : "--"}</td>
+                        </tr>
+                      `;
+                    })
+                    .join("")
+                : emptyRow(5, "No prediction bands available.")
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="explanation-section">
+      <h3>Sizing & Backtest</h3>
+      <div class="metrics explanation-metrics">
+        ${renderExplanationMetric("Buy Prob.", sizing.buy_probability === undefined ? "--" : fmtPercent(sizing.buy_probability, 0))}
+        ${renderExplanationMetric("Kelly Cap", sizing.capped_kelly_fraction === undefined ? "--" : fmtPercent(sizing.capped_kelly_fraction, 1))}
+        ${renderExplanationMetric("Rec. Notional", sizing.recommended_notional === undefined ? "--" : fmtCurrency(sizing.recommended_notional))}
+        ${renderExplanationMetric("Backtest PnL", backtest.pnl === undefined ? "--" : fmtPercent(backtest.pnl, 1), backtest.pnl >= 0 ? "gain" : "loss")}
+      </div>
+      <p class="metric-delta">
+        Stop ${sizing.stop_loss === undefined ? "--" : fmtPercent(sizing.stop_loss, 1)} /
+        Take profit ${sizing.take_profit === undefined ? "--" : fmtPercent(sizing.take_profit, 1)} /
+        Max DD ${backtest.max_drawdown === undefined ? "--" : fmtPercent(backtest.max_drawdown, 1)} /
+        Win/Loss ${fmtNullable(backtest.win_loss_ratio, 2)}
+      </p>
+    </div>
+  `;
+  modal.hidden = false;
+}
+
+function closeTradingAlgoExplanation() {
+  document.getElementById("algo-explanation-modal").hidden = true;
 }
 
 async function runTradingAlgoCommand(event) {
@@ -1186,6 +1324,7 @@ async function loadTerminal(runRefresh = true) {
 }
 
 window.populateOrderForm = populateOrderForm;
+window.openTradingAlgoExplanation = openTradingAlgoExplanation;
 document.getElementById("algo-form").addEventListener("submit", runTradingAlgoCommand);
 document.getElementById("order-form").addEventListener("submit", submitOrder);
 document.getElementById("refresh-button").addEventListener("click", refreshPortfolioPrices);
@@ -1193,6 +1332,12 @@ document.getElementById("rebalance-barbell-button").addEventListener("click", re
 document.getElementById("run-monte-carlo-button").addEventListener("click", runMonteCarloSimulation);
 document.getElementById("optimize-allocation-button").addEventListener("click", () => runAllocationOptimization(false));
 document.getElementById("apply-optimized-allocation-button").addEventListener("click", () => runAllocationOptimization(true));
+document.getElementById("algo-explanation-close").addEventListener("click", closeTradingAlgoExplanation);
+document.getElementById("algo-explanation-modal").addEventListener("click", (event) => {
+  if (event.target.id === "algo-explanation-modal") {
+    closeTradingAlgoExplanation();
+  }
+});
 document.getElementById("terminal-filter").addEventListener("input", (event) => {
   applyTerminalFilter(event.currentTarget.value);
 });

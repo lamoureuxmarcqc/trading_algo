@@ -209,6 +209,40 @@ Test cible:
 venv\Scripts\python.exe -m pytest services\api-core\tests\test_trading_algo_terminal.py -q
 ```
 
+## Planned AI Model Analytics API
+
+La roadmap detaillee est dans [../../docs/ai-trading-model-integration-roadmap.md](/C:/Users/marc/source/projet_trading/docs/ai-trading-model-integration-roadmap.md).
+
+Ces endpoints sont cibles pour le prochain chantier. Ils ne sont pas encore livres dans `api-core`.
+
+- `GET /api/v1/ai/models/{symbol}/diagnostics`
+  - metadonnees modele, `model_version`, `trained_at`, `inference_at`
+  - metrics historiques: directional accuracy, hit rate, MAE, RMSE, Sharpe des signaux
+  - staleness et drift flags
+- `GET /api/v1/ai/models/{symbol}/explanation`
+  - top features SHAP/LIME ou fallback heuristique
+  - contribution positive/negative par facteur
+- `GET /api/v1/ai/predictions/{symbol}/bands`
+  - horizons `1d`, `5d`, `30d`
+  - intervalles 50/80/95
+  - path median, downside et upside
+- `POST /api/v1/ai/sizing`
+  - Kelly fraction brute et cappee
+  - sizing ajuste par volatilite
+  - stop-loss/take-profit recommandes
+- `POST /api/v1/ai/backtests`
+  - PnL, max drawdown, win/loss ratio, trade count et benchmark comparison
+- `POST /api/v1/ai/paper-trading/stage`
+  - staging d'ordres papier dans `Pending Orders`
+  - seuil de buy probability, guardrails stop-loss/take-profit, idempotence et audit outbox
+
+Contraintes d'implementation:
+
+- commencer avec services deterministes et tests sans dependance reseau
+- ne jamais exposer d'execution live automatique sans permission separee
+- valider les guardrails cote API, pas seulement cote frontend
+- propager `X-Tenant-ID`, `X-Correlation-ID` et `Idempotency-Key` pour les operations de staging
+
 ## Alembic
 
 Baseline et durcissement outbox:

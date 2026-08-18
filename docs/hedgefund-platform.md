@@ -1,43 +1,84 @@
 # Hedge Fund Platform Blueprint
 
-Ce dossier matérialise une base monorepo pour faire évoluer `trading_algo` vers une plateforme de type family office / prop / hedge fund.
+> **Purpose:** define the current institutional architecture around `trading_algo` and establish the target operating model for a family-office / prop / hedge-fund style research and portfolio platform.
 
-## Gouvernance institutionnelle
+---
 
-Le cadre d'architecture v3.0 est maintenant explicité dans :
+# 1. Executive Positioning
 
-- [docs/architecture/README.md](/C:/Users/marc/source/projet_trading/docs/architecture/README.md)
-- [docs/architecture/platform-blueprint.md](/C:/Users/marc/source/projet_trading/docs/architecture/platform-blueprint.md)
-- [docs/architecture/api-governance.md](/C:/Users/marc/source/projet_trading/docs/architecture/api-governance.md)
-- [docs/architecture/event-governance.md](/C:/Users/marc/source/projet_trading/docs/architecture/event-governance.md)
-- [docs/architecture/adr/README.md](/C:/Users/marc/source/projet_trading/docs/architecture/adr/README.md)
+The repository is evolving from a standalone quantitative trading package into a modular institutional platform.
 
-## Architecture livrée
+The architecture deliberately separates:
 
-- `services/api-core`: API FastAPI modulaire avec endpoints auth, portfolio, trading, risk et AI.
-- `apps/web`: cockpit frontend Next.js pour CIO / trader / risk.
-- `infra/docker/docker-compose.hedgefund.yml`: stack locale PostgreSQL, Redis et API.
-- `services/api-core/sql/001_init.sql`: schéma bootstrap pour auth, market data, portfolio et exécution.
+```text
+Quant Research
+      ↓
+Signals / AI
+      ↓
+Risk Intelligence
+      ↓
+Portfolio Construction
+      ↓
+Paper Trading
+      ↓
+Future Execution Layer
+```
 
-## Positionnement
+The historical `trading_algo` package remains the quantitative engine. The institutional layer adds API contracts, persistence, orchestration, governance, risk and user-facing workflows.
 
-Le package historique `trading_algo` reste la brique quant existante.
-Le nouveau socle lui ajoute une couche produit, sécurité, API et orchestration.
+---
 
-## Standards déjà matérialisés
+# 2. Architecture at a Glance
 
-- versioning API sous `/api/v1`
-- propagation de `X-Correlation-ID`, `X-Tenant-ID` et `Idempotency-Key`
-- endpoints d'exploitabilité `GET /health`, `GET /ready`, `GET /metrics`
-- idempotence persistante sur la création d'ordres
-- outbox événementiel persistant pour les événements métier critiques
-- dispatcher d'outbox avec retry, statut de livraison et pilotage admin
-- index ADR pour les décisions structurantes
-- strategie d'allocation `barbell` exploitable par API et cockpit
+```text
+┌───────────────────────────────────────────────────────────┐
+│                     Next.js Cockpit                       │
+│ CIO │ Portfolio │ Risk │ Research │ Trading │ Admin      │
+└────────────────────────────┬──────────────────────────────┘
+                             │
+                             ▼
+┌───────────────────────────────────────────────────────────┐
+│                       FastAPI API                         │
+│ /auth │ /portfolio │ /orders │ /risk │ /signals │ /ai    │
+└───────────────┬───────────────────────┬───────────────────┘
+                │                       │
+                ▼                       ▼
+       ┌────────────────┐      ┌──────────────────┐
+       │ Domain Services│      │ Trading Algo      │
+       │ Risk / Portfolio│      │ Quant / ML Engine │
+       └───────┬────────┘      └──────────────────┘
+               │
+        ┌──────┴────────┐
+        ▼               ▼
+┌──────────────┐  ┌──────────────┐
+│ PostgreSQL   │  │ Redis        │
+│ State/Audit  │  │ Cache/Infra  │
+└──────────────┘  └──────────────┘
+               │
+               ▼
+        ┌──────────────┐
+        │ Event Outbox │
+        │ + Dispatcher │
+        └──────────────┘
+```
 
-## Cockpit frontend
+---
 
-Le frontend `apps/web` est maintenant branche sur `api-core` pour:
+# 3. Current Architecture
+
+## Backend
+
+`services/api-core` provides the institutional FastAPI layer with domains for:
+
+- authentication
+- portfolio
+- trading/orders
+- risk
+- AI/signals
+
+## Frontend
+
+`apps/web` provides the Next.js cockpit for:
 
 - `dashboard`
 - `portfolio`
@@ -46,69 +87,461 @@ Le frontend `apps/web` est maintenant branche sur `api-core` pour:
 - `trading`
 - `admin`
 
-Le mode degrade reste volontairement actif: si l'API est indisponible, les pages retombent sur un snapshot fallback explicite.
+## Infrastructure
 
-La page `portfolio` expose maintenant une lecture institutionnelle de la strategie `barbell`:
+The local stack includes:
 
-- split defensif / opportuniste / cash
-- poids cibles et poids courants
-- instructions de rebalance suggerees
-- justification de posture selon le regime de marche
+- PostgreSQL
+- Redis
+- FastAPI
 
-Le terminal web servi directement par FastAPI a aussi ete durci:
+via:
 
-- chargement agrege via un snapshot unique
-- reduction du fan-out HTTP au chargement
-- exposition native de la posture barbell
-- visibilite immediate sur l'etat de livraison de l'outbox evenementielle
-- surface de controle du snapshot: fraicheur marche, ordres ouverts, alertes risque/outbox
-- filtre global cote client pour explorer rapidement les tableaux et scenarios sans nouvel appel API
-- passerelle `trading_algo` integree: `analyze`, `compare` et `screen` executables depuis l'UI ou `POST /api/v1/terminal/trading-algo`
+```text
+infra/docker/docker-compose.hedgefund.yml
+```
 
-## Risk Intelligence
+## Database
 
-Le domaine risque couvre maintenant:
+Bootstrap SQL:
 
-- un catalogue de stress historiques multi-decennies
-- contexte macro: inflation, chomage, taux et informations de crise
-- impact estime sur le portefeuille courant
-- matrice de correlation portefeuille
-- exposition via `GET /api/v1/risk/scenarios` et `GET /api/v1/risk/correlations`
+```text
+services/api-core/sql/001_init.sql
+```
 
-## Portfolio Construction
+Alembic provides database versioning.
 
-Le socle `api-core` embarque maintenant une implementation initiale de la strategie barbell:
+---
 
-- poche defensive pour la preservation du capital
-- poche opportuniste pour la convexite et la croissance
-- reserve de cash explicite pour absorber les chocs et financer le redeploiement
-- allocation pilotee par le regime de marche et les signaux quantitatifs
-- exposition via `GET /api/v1/portfolio/barbell` et `POST /api/v1/portfolio/barbell`
+# 4. Institutional Governance
 
-## Trading Algo Integration
+The platform already establishes several institutional patterns.
 
-Le premier point de fusion entre le package historique `trading_algo` et le terminal institutionnel est livre dans `api-core`:
+## API Governance
 
-- service applicatif `TradingAlgoTerminalService`
-- endpoint `POST /api/v1/terminal/trading-algo`
-- panneau web **Trading Algo / Analysis Console** dans le terminal FastAPI
-- tests sans dependance reseau dans `services/api-core/tests/test_trading_algo_terminal.py`
+- API versioning under `/api/v1`
+- `X-Correlation-ID`
+- `X-Tenant-ID`
+- `Idempotency-Key`
+- Health endpoint
+- Readiness endpoint
+- Metrics endpoint
 
-La passerelle appelle directement les modules Python existants (`StockDataExtractor`, `RiskManager`) au lieu de lancer une commande shell arbitraire. Elle retourne un contrat stable pour le frontend: prix, tendance, recommandation, RSI, moyennes mobiles, volatilite, Sharpe, VaR et drawdown.
+## Order Safety
 
-## Database Versioning
+Order creation uses persistent idempotency controls.
 
-Alembic est maintenant prepare pour versionner `services/api-core`:
+This is important because retries, browser refreshes and network failures must not create duplicate orders.
 
-- metadata SQLAlchemy branchee dans `alembic/env.py`
-- premiere revision de durcissement outbox/idempotence
-- workflow cible: `alembic upgrade head` pour mettre les bases a niveau
+## Event Governance
 
-## Étapes suivantes
+Critical business events use a persistent outbox.
 
-1. Etendre la passerelle `trading_algo` aux vrais moteurs de screening/modeles quand les modules `trading_algo.models` seront disponibles dans le repo.
-2. Brancher les endpoints du `api-core` sur PostgreSQL avec SQLAlchemy.
-3. Remplacer les données de démonstration restantes par les agrégats `trading_algo`.
-4. Ajouter le realtime gateway NestJS / Socket.IO.
-5. Câbler le frontend aux endpoints FastAPI.
-6. Ajouter workers Celery, ingestion broker et contrôles de risque pré-trade.
+The outbox supports:
+
+- persistence
+- delivery status
+- retry
+- dispatcher control
+- operational visibility
+
+## Architecture Decisions
+
+Structural decisions should be recorded through ADRs.
+
+Relevant documentation:
+
+```text
+docs/architecture/adr/
+```
+
+---
+
+# 5. Frontend Operating Model
+
+The cockpit is organized around institutional roles.
+
+| Surface | Primary purpose |
+|---|---|
+| Dashboard | Executive overview |
+| Portfolio | Allocation and positioning |
+| Risk | Exposure, scenarios and correlations |
+| Research | Quant/AI analysis |
+| Trading | Orders and paper-trading workflow |
+| Admin | Operational and governance controls |
+
+## Degraded Mode
+
+The frontend intentionally supports explicit fallback behavior when the API is unavailable.
+
+The fallback must be visible to the user and must never be mistaken for live market state.
+
+---
+
+# 6. Portfolio Construction
+
+The platform includes an initial **barbell allocation** strategy.
+
+Conceptually:
+
+```text
+             Portfolio
+                 │
+       ┌─────────┼─────────┐
+       ▼         ▼         ▼
+   Defensive  Opportunistic Cash
+```
+
+The strategy provides:
+
+- defensive capital preservation
+- opportunistic growth/convexity
+- explicit cash reserve
+- regime-aware allocation
+- quantitative signal inputs
+
+Current API surfaces:
+
+```http
+GET  /api/v1/portfolio/barbell
+POST /api/v1/portfolio/barbell
+```
+
+The barbell should remain a **portfolio-construction framework**, not an implicit trading mandate.
+
+---
+
+# 7. Risk Intelligence
+
+The risk domain currently includes:
+
+- historical stress scenarios
+- macro context
+- portfolio impact estimates
+- portfolio correlation matrix
+
+Relevant API surfaces:
+
+```http
+GET /api/v1/risk/scenarios
+GET /api/v1/risk/correlations
+```
+
+The next logical extension is to connect risk intelligence to:
+
+- AI confidence
+- model drift
+- regime detection
+- position sizing
+- portfolio concentration
+- scenario-aware limits
+
+---
+
+# 8. Trading Algo Integration
+
+The first institutional integration point is:
+
+```text
+TradingAlgoTerminalService
+```
+
+Endpoint:
+
+```http
+POST /api/v1/terminal/trading-algo
+```
+
+Supported operations:
+
+- `analyze`
+- `compare`
+- `screen`
+
+The gateway calls Python modules directly rather than relying on arbitrary shell execution.
+
+Current output includes:
+
+- price
+- trend
+- recommendation
+- RSI
+- moving averages
+- volatility
+- Sharpe
+- VaR
+- maximum drawdown
+
+This establishes a stable application boundary between the legacy quant engine and the institutional platform.
+
+---
+
+# 9. AI Integration Strategy
+
+The next AI layer is defined in:
+
+```text
+docs/ai-trading-model-integration-roadmap.md
+```
+
+Target capabilities:
+
+### Diagnostics
+
+- Model version
+- Training timestamp
+- Inference timestamp
+- Confidence
+- Accuracy
+- MAE/RMSE
+- Signal Sharpe
+
+### Explainability
+
+- SHAP
+- LIME
+- Clearly labeled heuristic fallback
+
+### Probabilistic Predictions
+
+- 50%
+- 80%
+- 95%
+- 1D / 5D / 30D horizons
+- Prediction cones
+
+### Risk Alignment
+
+- Kelly-capped sizing
+- Volatility-adjusted sizing
+- Position limits
+- Model/data/concept drift
+
+### Backtesting
+
+- PnL
+- Drawdown
+- Win/loss
+- Trade count
+- Benchmark comparison
+- Costs and slippage
+
+### Paper Trading
+
+- Pending Orders
+- Minimum probability
+- Maximum notional
+- Stop-loss
+- Take-profit
+- Idempotency
+- Audit outbox
+
+---
+
+# 10. Separation of Concerns
+
+The architecture should maintain the following boundaries:
+
+| Layer | Responsibility |
+|---|---|
+| Market Data | Source and freshness |
+| Feature Engineering | Transformations |
+| AI/Quant | Predictions/signals |
+| Explainability | Interpretation |
+| Risk Engine | Limits and constraints |
+| Portfolio Engine | Allocation |
+| Order Service | Order lifecycle |
+| Outbox | Event reliability |
+| Audit | Traceability |
+| UI | Visualization and interaction |
+
+The frontend must not become the source of truth for risk or execution controls.
+
+---
+
+# 11. Data & Event Flow
+
+A typical research-to-paper-trade workflow should become:
+
+```text
+Market Data
+    ↓
+Feature Generation
+    ↓
+Model Inference
+    ↓
+Diagnostics + Explanation
+    ↓
+Probability / Signal
+    ↓
+Risk Validation
+    ↓
+Position Sizing
+    ↓
+Backtest Evidence
+    ↓
+Paper Order
+    ↓
+Idempotency Check
+    ↓
+Pending Orders
+    ↓
+Audit Event
+    ↓
+Outbox
+```
+
+This flow is intentionally more conservative than a direct:
+
+```text
+AI → Order
+```
+
+architecture.
+
+---
+
+# 12. Database Versioning
+
+Alembic is the migration mechanism for `services/api-core`.
+
+Standard workflow:
+
+```bash
+alembic upgrade head
+```
+
+For a database that has already been manually aligned:
+
+```bash
+alembic stamp head
+```
+
+Every migration should be:
+
+1. generated deliberately
+2. reviewed
+3. tested
+4. reversible where practical
+5. applied through the migration workflow
+
+---
+
+# 13. Operational Requirements
+
+The platform should continuously expose:
+
+- API health
+- API readiness
+- metrics
+- market-data freshness
+- order state
+- outbox state
+- risk alerts
+- model freshness
+- data drift
+- degraded-mode status
+
+Operational dashboards should distinguish:
+
+```text
+LIVE DATA
+STALE DATA
+FALLBACK DATA
+UNAVAILABLE
+```
+
+rather than collapsing all states into a single success/failure indicator.
+
+---
+
+# 14. Security Principles
+
+### Principle 1 — Least Privilege
+
+AI/research components should not automatically inherit live trading permissions.
+
+### Principle 2 — Server-Side Enforcement
+
+Critical risk and trading rules must be enforced at the API boundary.
+
+### Principle 3 — Explicit Live Permission
+
+Any future live execution path must require a distinct permission boundary.
+
+### Principle 4 — Idempotent Operations
+
+Order-creation operations must remain safe under retries.
+
+### Principle 5 — Auditability
+
+Material trading and portfolio decisions should be reconstructable after the fact.
+
+---
+
+# 15. Roadmap
+
+## Near Term
+
+1. AI diagnostic schemas/services
+2. AI Explanation UI
+3. Prediction bands
+4. Drift/staleness monitoring
+5. Risk-aware sizing
+6. Interactive backtesting
+
+## Medium Term
+
+7. Paper-trading staging
+8. Persistent backtest artifacts
+9. Persistent AI diagnostics
+10. Expanded screening/model integration
+
+## Future
+
+11. More sophisticated portfolio optimization
+12. Multi-model ensembles
+13. Regime-aware allocation
+14. Institutional reporting
+15. A separately governed execution layer, if ever required
+
+---
+
+# 16. Definition of Done
+
+A capability is considered institutionally ready only when it has:
+
+- a stable API contract
+- unit tests
+- integration tests where appropriate
+- explicit failure behavior
+- observability
+- auditability where material
+- database migration support where state is persisted
+- frontend handling
+- documented security boundaries
+- documented degraded mode
+
+A feature that works only in the UI is not considered complete.
+
+---
+
+# 17. Documentation Map
+
+| Document | Responsibility |
+|---|---|
+| `docs/architecture/README.md` | Architecture standards |
+| `docs/architecture/platform-blueprint.md` | Detailed architecture |
+| `docs/architecture/api-governance.md` | API standards |
+| `docs/architecture/event-governance.md` | Events/outbox |
+| `docs/architecture/adr/README.md` | Architecture decisions |
+| `docs/hedgefund-platform.md` | Platform blueprint |
+| `docs/ai-trading-model-integration-roadmap.md` | AI roadmap |
+
+---
+
+## Strategic Principle
+
+> **Institutional quality is not created by adding more features.**
+>
+> It is created by making every important decision **observable, reproducible, risk-bounded, testable and auditable**.

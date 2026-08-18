@@ -55,6 +55,13 @@ def test_trading_algo_terminal_analyzes_symbols_without_shelling_out() -> None:
     assert [item.symbol for item in response.analyses] == ["AAPL", "MSFT"]
     assert response.analyses[0].trend == "bullish"
     assert response.analyses[0].recommendation == "buy"
+    assert response.analyses[0].diagnostics is not None
+    assert response.analyses[0].diagnostics.confidence_score > 0.5
+    assert response.analyses[0].feature_importance
+    assert response.analyses[0].prediction_bands
+    assert response.analyses[0].sizing is not None
+    assert response.analyses[0].sizing.recommended_weight >= 0
+    assert response.analyses[0].backtest is not None
 
 
 def test_trading_algo_terminal_rejects_unknown_command() -> None:

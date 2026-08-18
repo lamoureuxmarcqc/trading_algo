@@ -67,6 +67,7 @@
               <option value="analyze">analyze</option>
               <option value="compare">compare</option>
               <option value="screen">screen</option>
+              <option value="simulate">simulate</option>
             </select>
           </label>
           <label>
@@ -95,6 +96,10 @@
                 <th>Symbol</th>
                 <th>Trend</th>
                 <th>Rec.</th>
+                <th>Model</th>
+                <th>Conf.</th>
+                <th>Size</th>
+                <th>Backtest</th>
                 <th>Price</th>
                 <th>Day</th>
                 <th>Total</th>
@@ -102,10 +107,11 @@
                 <th>Sharpe</th>
                 <th>VaR 95</th>
                 <th>RSI</th>
+                <th>AI</th>
               </tr>
             </thead>
             <tbody id="algo-table">
-              <tr><td colspan="10" class="empty-state">No trading-algo command has run yet.</td></tr>
+              <tr><td colspan="15" class="empty-state">No trading-algo command has run yet.</td></tr>
             </tbody>
           </table>
         </div>
@@ -581,6 +587,18 @@
           </div>
         </div>
       </section>
+    </div>
+    <div id="algo-explanation-modal" class="modal-backdrop" hidden>
+      <div class="modal-panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">AI Explanation</p>
+            <h2 id="algo-explanation-title">Model Details</h2>
+          </div>
+          <button id="algo-explanation-close" class="button secondary" type="button">Close</button>
+        </div>
+        <div id="algo-explanation-body" class="explanation-grid"></div>
+      </div>
     </div>
     <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
 

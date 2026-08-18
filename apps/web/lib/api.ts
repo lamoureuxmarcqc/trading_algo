@@ -258,13 +258,72 @@ export type TerminalSnapshotResponse = {
   event_summary: DomainEventSummary;
 };
 
-export type TradingAlgoCommand = "analyze" | "compare" | "screen";
+export type TradingAlgoCommand = "analyze" | "compare" | "screen" | "simulate";
 
 export type TradingAlgoCommandRequest = {
   command: TradingAlgoCommand;
   symbols: string[];
   period: string;
   max_symbols: number;
+};
+
+export type TradingAlgoFeatureContribution = {
+  feature: string;
+  contribution: number;
+  direction: string;
+  explanation: string;
+};
+
+export type TradingAlgoPredictionBand = {
+  horizon_days: number;
+  median_target: number;
+  expected_return: number;
+  intervals: Array<{
+    confidence: number;
+    low: number;
+    high: number;
+  }>;
+};
+
+export type TradingAlgoModelDiagnostics = {
+  model_version: string;
+  feature_set_version: string;
+  trained_at?: string | null;
+  inference_at: string;
+  confidence_score: number;
+  directional_accuracy_30d?: number | null;
+  directional_accuracy_90d?: number | null;
+  hit_rate?: number | null;
+  mae?: number | null;
+  rmse?: number | null;
+  signal_sharpe_30d?: number | null;
+  signal_sharpe_90d?: number | null;
+  model_stale: boolean;
+  data_drift_detected: boolean;
+  concept_drift_detected: boolean;
+  market_data_stale: boolean;
+};
+
+export type TradingAlgoPositionSizing = {
+  buy_probability: number;
+  model_edge: number;
+  kelly_fraction: number;
+  capped_kelly_fraction: number;
+  volatility_adjusted_weight: number;
+  recommended_weight: number;
+  recommended_notional: number;
+  stop_loss: number;
+  take_profit: number;
+};
+
+export type TradingAlgoBacktestSummary = {
+  lookback_days: number;
+  pnl: number;
+  max_drawdown: number;
+  win_loss_ratio: number;
+  trade_count: number;
+  exposure_time: number;
+  benchmark_return: number;
 };
 
 export type TradingAlgoSymbolAnalysis = {
@@ -284,6 +343,11 @@ export type TradingAlgoSymbolAnalysis = {
   sma_50?: number | null;
   trend: string;
   recommendation: string;
+  diagnostics?: TradingAlgoModelDiagnostics | null;
+  feature_importance: TradingAlgoFeatureContribution[];
+  prediction_bands: TradingAlgoPredictionBand[];
+  sizing?: TradingAlgoPositionSizing | null;
+  backtest?: TradingAlgoBacktestSummary | null;
 };
 
 export type TradingAlgoCommandResponse = {

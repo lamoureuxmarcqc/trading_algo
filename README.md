@@ -1,154 +1,219 @@
-# Trading Algo – Prédiction et Trading Automatisé d’Actions
+# Trading Algo — Quantitative Research & Institutional Trading Platform
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub](https://img.shields.io/badge/GitHub-Repo-green)](https://github.com/lamoureuxmarcqc/trading_algo)
 
-**Trading Algo** est une suite logicielle modulaire pour l'analyse financière quantitative. Il combine l'extraction de données massives, le machine learning (LSTM, CatBoost, etc.) et des visualisations interactives pour aider à la décision de trading sur le S&P 500.
+> **Trading Algo** is a modular quantitative research and trading platform combining market-data extraction, quantitative analytics, machine learning and institutional portfolio/risk infrastructure.
 
-## Institutional Platform Layer
+## Executive Overview
 
-Le repo inclut maintenant une fondation "hedge fund platform" prête à étendre autour du moteur `trading_algo` existant :
+The repository has evolved beyond a standalone trading-analysis package. It now contains two complementary layers:
 
-- [services/api-core/README.md](/C:/Users/marc/source/projet_trading/services/api-core/README.md)
-- [docs/hedgefund-platform.md](/C:/Users/marc/source/projet_trading/docs/hedgefund-platform.md)
-- [infra/docker/docker-compose.hedgefund.yml](/C:/Users/marc/source/projet_trading/infra/docker/docker-compose.hedgefund.yml)
-- [services/api-core/sql/001_init.sql](/C:/Users/marc/source/projet_trading/services/api-core/sql/001_init.sql)
-- [apps/web/app/page.tsx](/C:/Users/marc/source/projet_trading/apps/web/app/page.tsx)
+1. **Quant Engine — `trading_algo`**
+   - Market-data extraction and caching
+   - Technical and quantitative indicators
+   - Screening and comparative analysis
+   - Machine-learning experimentation
+   - Interactive research dashboards
 
-Cette couche apporte :
+2. **Institutional Platform — `services/api-core` + `apps/web`**
+   - FastAPI application layer
+   - Portfolio, trading, risk and AI domains
+   - PostgreSQL persistence
+   - Redis infrastructure
+   - Next.js institutional cockpit
+   - Event-driven governance and auditability
+   - Risk scenarios and portfolio construction
+   - Integration gateway for `trading_algo`
 
-- une API FastAPI modulaire pour `auth`, `portfolio`, `orders`, `risk`, `signals`
-- un schéma PostgreSQL institutionnel pour users, positions, orders, fills et market data
-- une stack locale Docker PostgreSQL + Redis + API
-- un cockpit frontend Next.js initial aligné sur les pages CIO / trader / risk / research
-- une base de gouvernance institutionnelle via ADRs, standards API et conventions event-driven
-- un cockpit Next.js désormais branché sur `api-core` avec fallback si l'API n'est pas disponible
-- un terminal web FastAPI agrege via snapshot unique, avec controles de fraicheur, alertes operationnelles et filtre global
-- une passerelle `trading_algo` integree au terminal FastAPI pour lancer `analyze`, `compare` et `screen` depuis l'UI ou l'API
-- un domaine risque enrichi avec stress historiques et matrice de corrélation
-- une strategie d'allocation `barbell` exploitable en API et visible dans le cockpit portefeuille
-- un socle Alembic pour versionner la base PostgreSQL
-
-Standards désormais visibles dans le repo :
-
-- [docs/architecture/README.md](/C:/Users/marc/source/projet_trading/docs/architecture/README.md)
-- [docs/architecture/adr/README.md](/C:/Users/marc/source/projet_trading/docs/architecture/adr/README.md)
-- [docs/architecture/api-governance.md](/C:/Users/marc/source/projet_trading/docs/architecture/api-governance.md)
-- [docs/architecture/event-governance.md](/C:/Users/marc/source/projet_trading/docs/architecture/event-governance.md)
+The strategic objective is to provide a **research → signal → risk → portfolio → paper-trading** workflow while keeping live execution explicitly separated from the AI/research layer.
 
 ---
 
-## 📌 Sommaire
-1. [Fonctionnalités](#-fonctionnalités)
-2. [Structure du projet](#-structure-du-projet)
-3. [Installation](#-installation)
-4. [Utilisation](#-utilisation)
-5. [Configuration](#-configuration-avancée)
-6. [Tests](#-tests)
-7. [Web Dashboard](#web-dashboard)
-8. [Contributions](#-contribution)
-9. [Licence](#-licence)
+## Current Platform Status
+
+| Capability | Status | Notes |
+|---|---|---|
+| Quantitative analysis | ✅ Available | `trading_algo` engine |
+| `analyze` / `compare` / `screen` | ✅ Available | Exposed through terminal/API |
+| FastAPI institutional API | ✅ Available | `/api/v1` |
+| Next.js cockpit | ✅ Available | CIO / portfolio / risk / research / trading / admin surfaces |
+| PostgreSQL persistence | ✅ Available | Institutional schema + Alembic foundation |
+| Redis infrastructure | ✅ Available | Local Docker stack |
+| Correlation / stress analysis | ✅ Available | Risk domain |
+| Barbell allocation | ✅ Available | API + portfolio cockpit |
+| Idempotent order creation | ✅ Available | API-level control |
+| Persistent outbox | ✅ Available | Event governance |
+| AI diagnostics | 🟡 Roadmap | Version, confidence, accuracy, drift |
+| Probabilistic prediction bands | 🟡 Roadmap | 50% / 80% / 95% |
+| AI position sizing | 🟡 Roadmap | Kelly-capped + volatility-adjusted |
+| Interactive backtesting | 🟡 Roadmap | PnL, drawdown, benchmark |
+| Paper-trading staging | 🟡 Roadmap | Guardrails + audit |
+| Live automated execution | 🔴 Not a current objective | Must remain separately permissioned |
+
+See [`docs/hedgefund-platform.md`](docs/hedgefund-platform.md) and [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md).
 
 ---
 
-## ✨ Fonctionnalités
+## Core Capabilities
 
-- 📈 **Extraction de données** : Intégration native avec `yfinance`, support de cache local pour éviter les limitations d'API.
-- 🧠 **Intelligence Artificielle** : 
-  - Modèles Deep Learning : **LSTM** (TensorFlow) pour les séries temporelles.
-  - Modèles Classiques : **CatBoost**, **SVR**, **MLP**, et **Régression Linéaire**.
-- 🔍 **Auto-ML Lite** : Recherche automatique du meilleur modèle via `find_best_model.py`.
-- 📊 **Dashboards** : Génération automatique de rapports interactifs en HTML (Plotly/Dash).
-- 💼 **Gestion de Portefeuille** : Outils de screening et de suivi des performances.
+### Quantitative Research
+
+- Market-data extraction through `yfinance`
+- Local caching to reduce repeated API calls
+- S&P 500 screening
+- Technical indicators and risk statistics
+- Comparative analysis across securities
+- Interactive Plotly/Dash reporting
+
+### Machine Learning
+
+Current experimentation includes:
+
+- **LSTM** for time-series modelling
+- **CatBoost**
+- **SVR**
+- **MLP**
+- **Linear Regression**
+- Auto-ML-style model selection through `find_best_model.py`
+
+The AI roadmap extends this foundation with diagnostics, probabilistic predictions, explainability, risk-aware sizing and backtesting.
+
+### Institutional Platform
+
+The institutional layer currently provides:
+
+- FastAPI domain services
+- PostgreSQL persistence
+- Redis infrastructure
+- Next.js cockpit
+- Health/readiness/metrics endpoints
+- Correlation and tenant identifiers
+- Persistent order idempotency
+- Event outbox and retry mechanisms
+- Risk scenarios and portfolio correlations
+- Barbell portfolio allocation
+- Trading Algo integration
 
 ---
 
-## 🗂️ Structure du Projet
+## Repository Structure
 
 ```text
-trading_algo/           # Package principal
-├── data/               # Extraction et gestion des données boursières
-├── models/             # Architecture des modèles et scripts d'entraînement
-├── preprocessing/      # Pipelines de nettoyage et scaling
-├── screening/          # Algorithmes de sélection (S&P 500)
-├── visualization/      # Moteur de rendu des dashboards
-├── web_dashboard/      # Interface Dash pour visualisation et contrôle
-├── __init__.py
-└── __main__.py         # Point d'entrée CLI
-pyproject.toml          # Dépendances et configuration build
-.env                    # Secrets et configurations (à créer)
+.
+├── trading_algo/                    # Quantitative research and ML engine
+│   ├── data/                        # Market-data extraction
+│   ├── models/                      # ML architectures and training
+│   ├── preprocessing/               # Cleaning, scaling and feature pipelines
+│   ├── screening/                   # Universe screening
+│   ├── visualization/               # Charts and reporting
+│   ├── web_dashboard/               # Dash interface
+│   ├── __init__.py
+│   └── __main__.py
+│
+├── services/
+│   └── api-core/                    # FastAPI institutional backend
+│
+├── apps/
+│   └── web/                         # Next.js institutional cockpit
+│
+├── docs/
+│   ├── architecture/                # Architecture, ADRs and governance
+│   ├── hedgefund-platform.md        # Platform blueprint
+│   └── ai-trading-model-integration-roadmap.md
+│
+├── infra/
+│   └── docker/                      # Local infrastructure
+│
+├── models_saved/                    # Trained models / scalers / reports
+├── dashboards/                      # Generated HTML dashboards
+├── logs/                            # Runtime logs
+├── pyproject.toml
+└── .env                             # Local secrets/configuration — never commit
+```
 
 ---
 
-## 🚀 Installation
+## Installation
 
-### 1. Cloner et préparer l'environnement
+### 1. Clone the repository
+
 ```bash
-git clone [https://github.com/lamoureuxmarcqc/trading_algo.git](https://github.com/lamoureuxmarcqc/trading_algo.git)
+git clone https://github.com/lamoureuxmarcqc/trading_algo.git
 cd trading_algo
-python -m venv venv
-# Activation (Linux/Mac) : source venv/bin/activate | (Windows) : venv\Scripts\activate
 ```
 
-### 2. Installation du package
+### 2. Create a virtual environment
+
+Windows:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+Linux/macOS:
+
 ```bash
-pip install --upgrade pip
+python -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Install the package
+
+```bash
+python -m pip install --upgrade pip
 pip install -e .
 ```
 
-### 3. Configuration des API
-Copiez le fichier d'exemple et remplissez vos clés :
+### 4. Configure environment variables
+
+Create `.env` from the available example when present:
+
 ```bash
-cp .env.example .env  # Si disponible, sinon créez un fichier .env
+cp .env.example .env
 ```
-*Le système fonctionne en mode dégradé (données simulées) si les clés sont manquantes.*
+
+> Never commit API keys, credentials or production secrets.
 
 ---
 
-## 🏁 Utilisation
+## Command-Line Usage
 
-L'outil s'utilise principalement via la commande globale `trading-algo`.
+The primary CLI is `trading-algo`.
 
-| Commande | Description |
-| :--- | :--- |
-| `trading-algo` | Lance le menu interactif. |
-| `trading-algo AAPL --advanced` | Analyse complète de l'action avec modèle avancé. |
-| `trading-algo MSFT --mode train` | Entraîne le modèle sur Microsoft. |
-| `trading-algo AAPL,TSLA --mode compare` | Compare les performances de deux titres. |
-| `trading-algo --mode screen` | Recherche les meilleures opportunités du S&P 500. |
+| Command | Purpose |
+|---|---|
+| `trading-algo` | Interactive menu |
+| `trading-algo AAPL --advanced` | Advanced analysis |
+| `trading-algo MSFT --mode train` | Train a model |
+| `trading-algo AAPL,TSLA --mode compare` | Compare securities |
+| `trading-algo --mode screen` | Screen the supported universe |
 
-L'outil web de trading
-uvicorn app.main:app --reload --app-dir ...\projet_trading\services\api-core
+---
 
-### Terminal institutionnel + trading-algo
+## Institutional Terminal
 
-Le terminal FastAPI est accessible sur :
+Start the FastAPI terminal locally:
 
-```bash
-.\venv\Scripts\activate
+```powershell
+.\.venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload --app-dir services/api-core
 ```
 
-Puis ouvrez :
+Open:
 
 ```text
 http://127.0.0.1:8000/api/v1/terminal
 ```
 
-La section **Trading Algo / Analysis Console** fusionne le moteur `trading_algo` avec le terminal institutionnel. Elle permet de lancer :
-
-- `analyze` : analyse un ou plusieurs symboles avec prix, tendance, RSI, volatilite, Sharpe, VaR et drawdown
-- `compare` : classe plusieurs symboles selon le retour total, la recommandation et le Sharpe
-- `screen` : applique le meme scoring a un univers limite de symboles pour trouver les meilleurs candidats
-
-L'endpoint correspondant est :
+The terminal integrates the existing quant engine through:
 
 ```http
 POST /api/v1/terminal/trading-algo
 ```
 
-Exemple de payload :
+Example:
 
 ```json
 {
@@ -159,114 +224,191 @@ Exemple de payload :
 }
 ```
 
+Supported commands:
+
+- `analyze`
+- `compare`
+- `screen`
+
+The integration currently exposes price, trend, recommendation, RSI, moving averages, volatility, Sharpe, VaR and maximum drawdown.
+
 ---
 
-## 📊 Sorties et Artefacts
+## AI Roadmap
 
-Les résultats sont organisés comme suit :
-- **`models_saved/`** : Contient les fichiers `.keras`, les scalers `.pkl` et les rapports JSON de performances.
-- **`dashboards/`** : Rapports visuels interactifs au format `.html`.
-- **`logs/`** : Historique détaillé des opérations et erreurs.
+The next major product layer is documented in [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md).
 
----
+Planned capabilities include:
 
-## 🧪 Tests
+- Model versioning and confidence
+- Historical directional accuracy
+- MAE / RMSE
+- Signal Sharpe
+- SHAP/LIME explanations
+- Probabilistic prediction bands
+- Kelly-capped and volatility-adjusted sizing
+- Model/data/concept drift detection
+- Interactive backtesting
+- Paper-trading order staging
+- Idempotency and audit controls
 
-Pour garantir la stabilité, lancez la suite de tests :
-```bash
-# Lancer tous les tests
-python -m unittest discover tests
+The design principle is:
 
-# Test spécifique des imports
-python trading_algo/test_imports.py
-
-# Tests api-core de la passerelle trading_algo/terminal
-venv\Scripts\python.exe -m pytest services\api-core\tests\test_trading_algo_terminal.py -q
-```
+> **AI generates research and decision support; risk controls remain deterministic and enforceable at the API boundary.**
 
 ---
 
 ## Web Dashboard
 
-Le projet inclut une interface Dash pour la visualisation et le contrôle du terminal de trading.
+The repository also includes the existing Dash research interface.
 
-### Démarrage local
-1. Créez et activez un environnement virtuel :
-```bash
-python -m venv .venv
-source .venv/bin/activate  # macOS / Linux
-.\.venv\Scripts\activate   # Windows PowerShell
-```
-
-2. Installez les dépendances :
-```bash
-pip install -r requirements.txt
-```
-
-3. Variables d'environnement utiles :
-
-- `DEBUG` : `True` ou `False` (par défaut `True` si non défini)
-- `WEB_HOST` : adresse d'écoute (par défaut `127.0.0.1`)
-- `WEB_PORT` : port du serveur (par défaut `8050`)
-- `REDIS_URL` / `REDIS_URI` : URL Redis (optionnel) pour le cache
-
-4. Lancer l'application :
 ```bash
 python start.py
-# ou
+```
+
+or:
+
+```bash
 python -m trading_algo.web_dashboard.app
 ```
 
-Le dashboard sera accessible à `http://{WEB_HOST}:{WEB_PORT}`.
+Typical local address:
 
-### Points d'attention / Dépannage
-- Si les onglets n'apparaissent pas : vérifier les logs du serveur pour des erreurs d'import au démarrage (modules lourds comme TensorFlow peuvent planter l'import des callbacks). Utiliser le journal pour identifier le module fautif.
-- Messages d'avertissement React (ex: `defaultProps`) provenant de bibliothèques (dash-bootstrap-components) sont généralement sans gravité.
-- Vérifier `assets/` et `assets/custom.css` si le style masque des composants (ex. `display: none` sur `.nav` ou `.tab`).
-- Pour debug côté client : ouvrir DevTools → Network → filtrer `/_dash-layout` et `/_dash-update-component` pour voir les réponses 500 et le message d'erreur Python.
+```text
+http://127.0.0.1:8050
+```
 
-### Alembic / Base de données
+Useful environment variables:
 
-Le repo inclut désormais un socle Alembic pour `services/api-core`.
+- `DEBUG`
+- `WEB_HOST`
+- `WEB_PORT`
+- `REDIS_URL`
+- `REDIS_URI`
 
-Workflow recommandé :
+### Troubleshooting
+
+If dashboard tabs fail to load:
+
+1. Inspect startup logs for import failures.
+2. Check heavy dependencies such as TensorFlow.
+3. Verify `assets/` and `assets/custom.css`.
+4. Use browser DevTools → Network.
+5. Inspect `/_dash-layout` and `/_dash-update-component` responses.
+
+---
+
+## Database Migrations
+
+The API layer uses Alembic.
+
+Upgrade:
 
 ```bash
 alembic upgrade head
 ```
 
-Si la base existait déjà avant l'introduction d'Alembic et qu'elle a déjà été alignée manuellement :
+If an existing database is already manually aligned:
 
 ```bash
 alembic stamp head
 ```
 
-Puis, pour chaque évolution future :
+Recommended workflow:
 
-1. modifier les modèles SQLAlchemy
-2. générer une migration
-3. relire la migration
-4. appliquer avec `alembic upgrade head`
-
-### Configuration du scheduler
-- Intervalle de rafraîchissement configurable via `MARKET_REFRESH_INTERVAL_MIN` dans `trading_algo.settings`.
-- En production, préférez un worker séparé (Celery/Redis) pour éviter le blocage du process web.
+1. Modify SQLAlchemy models.
+2. Generate a migration.
+3. Review the generated migration.
+4. Test it against a representative database.
+5. Apply with `alembic upgrade head`.
 
 ---
 
-## 🤝 Contribution
+## Testing
 
-1. Forkez le dépôt.
-2. Créez votre branche : `git checkout -b feature/nom-de-la-feature`.
-3. Assurez-vous que votre code respecte la norme **PEP8**.
-4. Ouvrez une Pull Request.
+Run the Python test suite:
+
+```bash
+python -m unittest discover tests
+```
+
+Run API integration tests:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest services\api-core\tests\test_trading_algo_terminal.py -q
+```
+
+Before considering a feature complete, validate:
+
+- Unit tests
+- API contract tests
+- Database migration behavior
+- Frontend build
+- Fallback/degraded mode
+- Risk and order guardrails
 
 ---
 
-## 📄 Licence
+## Operational Principles
 
-Distribué sous licence **MIT**. Voir `LICENSE` pour plus d'informations.
+### 1. Research ≠ Execution
+
+Research models must not directly obtain unrestricted live-order authority.
+
+### 2. Risk Controls Are Server-Side
+
+Critical controls must be enforced by the API, not only by the frontend.
+
+### 3. Auditability Is a First-Class Requirement
+
+Order staging, critical decisions and business events should be traceable.
+
+### 4. Safe Degradation
+
+The frontend may fall back to an explicit snapshot when the API is unavailable. The UI must clearly identify degraded data.
+
+### 5. No False Precision
+
+AI predictions must expose confidence and data/model freshness rather than presenting point forecasts as certainty.
 
 ---
 
-**Développé avec ❤️ par Marc Lamoureux** 🔗 [GitHub Profile](https://github.com/lamoureuxmarcqc)
+## Documentation Map
+
+| Document | Purpose |
+|---|---|
+| [`docs/hedgefund-platform.md`](docs/hedgefund-platform.md) | Institutional platform architecture and current capabilities |
+| [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md) | AI integration roadmap and acceptance criteria |
+| [`docs/architecture/README.md`](docs/architecture/README.md) | Architecture standards |
+| [`docs/architecture/api-governance.md`](docs/architecture/api-governance.md) | API governance |
+| [`docs/architecture/event-governance.md`](docs/architecture/event-governance.md) | Event/outbox governance |
+| [`docs/architecture/adr/README.md`](docs/architecture/adr/README.md) | Architecture Decision Records |
+
+---
+
+## Outputs and Artifacts
+
+- `models_saved/` — trained models, scalers and performance reports
+- `dashboards/` — interactive HTML dashboards
+- `logs/` — operational and error logs
+
+---
+
+## Contribution
+
+1. Create a feature branch.
+2. Keep changes focused and reviewable.
+3. Follow PEP 8 for Python.
+4. Add tests for behavioral changes.
+5. Update relevant documentation.
+6. Open a Pull Request.
+
+---
+
+## License
+
+Distributed under the MIT License. See [`LICENSE`](LICENSE).
+
+---
+
+**Developed by Marc Lamoureux**
