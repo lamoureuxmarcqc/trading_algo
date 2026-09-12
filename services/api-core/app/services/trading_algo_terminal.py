@@ -63,7 +63,7 @@ class TradingAlgoTerminalService:
 
         for symbol in symbols:
             try:
-                analyses.append(self._analyze_symbol(symbol, payload.period))
+                analyses.append(self.analyze_symbol(symbol, payload.period))
             except Exception as exc:  # pragma: no cover - defensive guard for data providers
                 errors.append(f"{symbol}: {exc}")
 
@@ -184,6 +184,9 @@ class TradingAlgoTerminalService:
                 errors=[str(exc)],
             )
 
+    def analyze_symbol(self, symbol: str, period: str = "1y") -> TradingAlgoSymbolAnalysis:
+        return self._analyze_symbol(symbol.upper().strip(), period)
+
     def _analyze_symbol(self, symbol: str, period: str) -> TradingAlgoSymbolAnalysis:
         history = self.extractor.get_historical_data(symbol=symbol, period=period)
         if history.empty:
@@ -223,6 +226,7 @@ class TradingAlgoTerminalService:
             score=score,
         )
         buy_probability = self._buy_probability(score, rsi, trend)
+        explained_at = datetime.now(timezone.utc).isoformat()
         feature_importance = self._feature_importance(
             latest_price=latest_price,
             sma_20=sma_20,
@@ -254,7 +258,11 @@ class TradingAlgoTerminalService:
                 frame=frame,
                 returns=returns,
                 confidence_score=buy_probability,
+                trend=trend,
+                recommendation=recommendation,
             ),
+            explanation_source="heuristic_fallback",
+            explained_at=explained_at,
             feature_importance=feature_importance,
             prediction_bands=self._prediction_bands(
                 latest_price=latest_price,
@@ -367,6 +375,8 @@ class TradingAlgoTerminalService:
         frame: pd.DataFrame,
         returns: pd.Series,
         confidence_score: float,
+        trend: str = "unknown",
+        recommendation: str = "watch",
     ) -> TradingAlgoModelDiagnostics:
         close = frame["Close"].dropna().astype(float) if "Close" in frame else pd.Series(dtype=float)
         signal = self._signal_series(frame)
@@ -403,6 +413,7 @@ class TradingAlgoTerminalService:
                 and directional_accuracy_30d + 0.12 < directional_accuracy_90d
             ),
             market_data_stale=latest_age_hours is None or latest_age_hours > 24,
+            regime_mismatch=bool(trend == "bearish" and recommendation == "buy"),
         )
 
     def _feature_importance(
@@ -483,12 +494,16 @@ class TradingAlgoTerminalService:
             daily_vol = 0.01
 
         bands: list[TradingAlgoPredictionBand] = []
+        annual_vol = daily_vol * math.sqrt(252)
+        stop_return = -max(0.04, min(0.18, annual_vol / math.sqrt(252) * 8))
+        target_return = max(0.08, min(0.35, abs(daily_mean * 252) * 0.35 + annual_vol * 0.25))
         for horizon in [1, 5, 30]:
             expected_return = daily_mean * horizon
             median = latest_price * (1 + expected_return)
+            horizon_vol = daily_vol * math.sqrt(horizon)
             intervals = []
             for confidence, z_score in [(0.50, 0.674), (0.80, 1.282), (0.95, 1.96)]:
-                band_width = z_score * daily_vol * math.sqrt(horizon)
+                band_width = z_score * horizon_vol
                 intervals.append(
                     TradingAlgoPredictionInterval(
                         confidence=confidence,
@@ -496,11 +511,21 @@ class TradingAlgoTerminalService:
                         high=round(latest_price * (1 + expected_return + band_width), 4),
                     )
                 )
+            target_price = latest_price * (1 + target_return)
+            stop_price = latest_price * (1 + stop_return)
             bands.append(
                 TradingAlgoPredictionBand(
                     horizon_days=horizon,
                     median_target=round(median, 4),
                     expected_return=round(expected_return, 6),
+                    target_price=round(target_price, 4),
+                    stop_price=round(stop_price, 4),
+                    probability_of_target=self._barrier_hit_probability(
+                        expected_return, horizon_vol, target_return, upper=True
+                    ),
+                    probability_of_stop=self._barrier_hit_probability(
+                        expected_return, horizon_vol, stop_return, upper=False
+                    ),
                     intervals=intervals,
                 )
             )
@@ -523,6 +548,7 @@ class TradingAlgoTerminalService:
         capped_kelly = float(np.clip(kelly_fraction, 0.0, 0.15))
         volatility_adjusted = float(np.clip(0.18 / realized_vol * capped_kelly, 0.0, 0.12))
         recommended_weight = min(capped_kelly, volatility_adjusted)
+        recommended_notional = 1_000_000 * recommended_weight
         return TradingAlgoPositionSizing(
             buy_probability=round(buy_probability, 4),
             model_edge=round(model_edge, 4),
@@ -530,7 +556,9 @@ class TradingAlgoTerminalService:
             capped_kelly_fraction=round(capped_kelly, 4),
             volatility_adjusted_weight=round(volatility_adjusted, 4),
             recommended_weight=round(recommended_weight, 4),
-            recommended_notional=round(1_000_000 * recommended_weight, 2),
+            recommended_notional=round(recommended_notional, 2),
+            recommended_quantity=round(recommended_notional / latest_price, 4) if latest_price else None,
+            risk_budget_consumed=round(min(recommended_weight / 0.12, 1.0), 4),
             stop_loss=round(max(0.04, min(0.18, realized_vol / math.sqrt(252) * 8)), 4),
             take_profit=round(max(0.08, min(0.35, abs(model_edge) * 1.8 + realized_vol * 0.25)), 4),
         )
@@ -554,15 +582,133 @@ class TradingAlgoTerminalService:
         trade_count = int((exposed.astype(int).diff().fillna(0) > 0).sum())
         wins = int((strategy_returns[strategy_returns != 0] > 0).sum())
         losses = int((strategy_returns[strategy_returns != 0] < 0).sum())
+        active_trades = strategy_returns[strategy_returns != 0]
+        pnl = float(equity.iloc[-1] - 1)
+        benchmark_return = float((1 + returns.tail(lookback)).prod() - 1)
+        downside = strategy_returns[strategy_returns < 0]
+        sortino = None
+        if not downside.empty and float(downside.std()) > 0:
+            sortino = float(strategy_returns.mean() / downside.std() * math.sqrt(252))
         return TradingAlgoBacktestSummary(
             lookback_days=lookback,
-            pnl=round(float(equity.iloc[-1] - 1), 6),
+            pnl=round(pnl, 6),
+            annualized_return=round(float((1 + pnl) ** (252 / max(lookback, 1)) - 1), 6),
             max_drawdown=round(float(drawdown.min()), 6),
             win_loss_ratio=round(float(wins / max(losses, 1)), 4),
             trade_count=trade_count,
             exposure_time=round(float(exposed.mean()), 4),
-            benchmark_return=round(float((1 + returns.tail(lookback)).prod() - 1), 6),
+            average_trade=round(float(active_trades.mean()), 6) if not active_trades.empty else 0.0,
+            fees=0.0,
+            slippage=0.0,
+            benchmark_return=round(benchmark_return, 6),
+            excess_return=round(pnl - benchmark_return, 6),
+            sharpe_ratio=self._signal_sharpe(strategy_returns),
+            sortino_ratio=round(sortino, 4) if sortino is not None else None,
         )
+
+    def backtest_with_policy(
+        self,
+        symbol: str,
+        *,
+        period: str,
+        lookback_days: int,
+        buy_probability_threshold: float,
+        stop_loss: float,
+        take_profit: float,
+        slippage_bps: float,
+        max_position_weight: float,
+    ) -> TradingAlgoBacktestSummary:
+        analysis = self.analyze_symbol(symbol, period)
+        history = self.extractor.get_historical_data(symbol=symbol, period=period)
+        if history.empty:
+            raise ValueError("no historical data returned")
+        features = self.extractor.calculate_technical_indicators(history)
+        frame = features if not features.empty else history
+        close = history["Close"].dropna().astype(float)
+        returns = close.pct_change().replace([math.inf, -math.inf], pd.NA).dropna()
+        lookback = min(max(int(lookback_days), 5), len(returns))
+        raw_signal = self._signal_series(frame).reindex(returns.index).fillna(0)
+        buy_gate = 1.0 if (analysis.sizing and analysis.sizing.buy_probability >= buy_probability_threshold) else 0.0
+        signal = (raw_signal * buy_gate).clip(upper=1.0)
+        slippage = slippage_bps / 10_000.0
+        entries = (signal.shift(1).fillna(0) > 0) & (signal.shift(2).fillna(0) == 0)
+        strategy_returns = (signal.shift(1).fillna(0) * returns * max_position_weight).tail(lookback)
+        costs = entries.reindex(strategy_returns.index).fillna(False).astype(float) * (slippage + 0.0005)
+        strategy_returns = strategy_returns - costs
+        if stop_loss > 0 or take_profit > 0:
+            clipped = strategy_returns.clip(lower=-abs(stop_loss) * max_position_weight, upper=abs(take_profit) * max_position_weight)
+            strategy_returns = clipped
+        if strategy_returns.empty:
+            raise ValueError("insufficient history for backtest")
+        equity = (1 + strategy_returns).cumprod()
+        drawdown = equity / equity.cummax() - 1
+        exposed = signal.tail(lookback) > 0
+        trade_count = int((exposed.astype(int).diff().fillna(0) > 0).sum())
+        wins = int((strategy_returns[strategy_returns != 0] > 0).sum())
+        losses = int((strategy_returns[strategy_returns != 0] < 0).sum())
+        active_trades = strategy_returns[strategy_returns != 0]
+        pnl = float(equity.iloc[-1] - 1)
+        benchmark_return = float((1 + returns.tail(lookback)).prod() - 1)
+        downside = strategy_returns[strategy_returns < 0]
+        sortino = None
+        if not downside.empty and float(downside.std()) > 0:
+            sortino = float(strategy_returns.mean() / downside.std() * math.sqrt(252))
+        return TradingAlgoBacktestSummary(
+            lookback_days=lookback,
+            pnl=round(pnl, 6),
+            annualized_return=round(float((1 + pnl) ** (252 / max(lookback, 1)) - 1), 6),
+            max_drawdown=round(float(drawdown.min()), 6),
+            win_loss_ratio=round(float(wins / max(losses, 1)), 4),
+            trade_count=trade_count,
+            exposure_time=round(float(exposed.mean()), 4),
+            average_trade=round(float(active_trades.mean()), 6) if not active_trades.empty else 0.0,
+            fees=round(float(entries.tail(lookback).sum() * 0.0005), 6),
+            slippage=round(float(entries.tail(lookback).sum() * slippage), 6),
+            benchmark_return=round(benchmark_return, 6),
+            excess_return=round(pnl - benchmark_return, 6),
+            sharpe_ratio=self._signal_sharpe(strategy_returns),
+            sortino_ratio=round(sortino, 4) if sortino is not None else None,
+        )
+
+    @staticmethod
+    def parse_lookback_days(lookback: str, default: int = 180) -> int:
+        token = str(lookback or "").strip().lower()
+        if token.endswith("d") and token[:-1].isdigit():
+            return max(int(token[:-1]), 5)
+        if token.endswith("mo") and token[:-2].isdigit():
+            return max(int(token[:-2]) * 21, 5)
+        if token.endswith("y") and token[:-1].isdigit():
+            return max(int(token[:-1]) * 252, 5)
+        if token.isdigit():
+            return max(int(token), 5)
+        return default
+
+    @staticmethod
+    def warning_flags(diagnostics: TradingAlgoModelDiagnostics | None) -> list[str]:
+        if diagnostics is None:
+            return ["model_unavailable"]
+        flags = []
+        if diagnostics.model_stale:
+            flags.append("model_stale")
+        if diagnostics.market_data_stale:
+            flags.append("market_data_stale")
+        if diagnostics.data_drift_detected:
+            flags.append("data_drift_detected")
+        if diagnostics.concept_drift_detected:
+            flags.append("concept_drift_detected")
+        if diagnostics.regime_mismatch:
+            flags.append("regime_mismatch")
+        return flags
+
+    @staticmethod
+    def _barrier_hit_probability(expected_return: float, horizon_vol: float, barrier: float, *, upper: bool) -> float:
+        if horizon_vol <= 0:
+            hit = expected_return >= barrier if upper else expected_return <= barrier
+            return 1.0 if hit else 0.0
+        z_score = (barrier - expected_return) / horizon_vol
+        cdf = 0.5 * (1.0 + math.erf(z_score / math.sqrt(2.0)))
+        probability = 1.0 - cdf if upper else cdf
+        return round(float(np.clip(probability, 0.0, 1.0)), 4)
 
     @staticmethod
     def _signal_series(frame: pd.DataFrame) -> pd.Series:

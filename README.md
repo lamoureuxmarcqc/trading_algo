@@ -44,11 +44,11 @@ The strategic objective is to provide a **research → signal → risk → portf
 | Barbell allocation | ✅ Available | API + portfolio cockpit |
 | Idempotent order creation | ✅ Available | API-level control |
 | Persistent outbox | ✅ Available | Event governance |
-| AI diagnostics | 🟡 Roadmap | Version, confidence, accuracy, drift |
-| Probabilistic prediction bands | 🟡 Roadmap | 50% / 80% / 95% |
-| AI position sizing | 🟡 Roadmap | Kelly-capped + volatility-adjusted |
-| Interactive backtesting | 🟡 Roadmap | PnL, drawdown, benchmark |
-| Paper-trading staging | 🟡 Roadmap | Guardrails + audit |
+| AI diagnostics | ✅ Available | Version, confidence, accuracy, staleness, drift flags |
+| Probabilistic prediction bands | ✅ Available | 50% / 80% / 95%, 1D / 5D / 30D |
+| AI position sizing | ✅ Available | Kelly-capped + volatility-adjusted |
+| Interactive backtesting | ✅ Available | PnL, drawdown, benchmark, costs |
+| Paper-trading staging | ✅ Available | Guardrails + idempotence + audit |
 | Live automated execution | 🔴 Not a current objective | Must remain separately permissioned |
 
 See [`docs/hedgefund-platform.md`](docs/hedgefund-platform.md) and [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md).
@@ -56,6 +56,14 @@ See [`docs/hedgefund-platform.md`](docs/hedgefund-platform.md) and [`docs/ai-tra
 ---
 
 ## Core Capabilities
+
+### Institutional Enterprise & Compliance Layer (JPMorgan / RBC Grade)
+
+- **Enterprise Connectivity:** Order Management System (OMS) & Execution Management System (EMS) gateways via FIX Protocol (4.2/4.4/5.0).
+- **Pre-Trade Risk Engine:** Hard-stop risk controls including fat-finger thresholds, counterparty limits, single-issuer exposure limits, and Stressed VaR (SVaR).
+- **Regulatory Audit & CAT Traceability:** Nanosecond-precision event logging adhering to MiFID II / Consolidated Audit Trail (CAT) guidelines for full decision chain reconstruction.
+- **Enterprise IAM & Security:** Multi-tenant architecture with RBAC (Role-Based Access Control), SSO (OAuth2/OIDC, SAML 2.0), and audit trails.
+- **Performance Attribution & Reporting:** Barra/Brinson multi-factor attribution models and automated PDF/HTML market monitor reporting (Factsheet generation).
 
 ### Quantitative Research
 
@@ -77,7 +85,7 @@ Current experimentation includes:
 - **Linear Regression**
 - Auto-ML-style model selection through `find_best_model.py`
 
-The AI roadmap extends this foundation with diagnostics, probabilistic predictions, explainability, risk-aware sizing and backtesting.
+The AI layer now exposes first-pass deterministic diagnostics, probabilistic predictions, explainability, risk-aware sizing, backtesting and paper-trading staging APIs. These contracts are intentionally bounded: live execution remains outside the AI permission surface.
 
 ### Institutional Platform
 
@@ -238,19 +246,25 @@ The integration currently exposes price, trend, recommendation, RSI, moving aver
 
 The next major product layer is documented in [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md).
 
-Planned capabilities include:
+Delivered first-pass capabilities include:
 
 - Model versioning and confidence
 - Historical directional accuracy
 - MAE / RMSE
 - Signal Sharpe
-- SHAP/LIME explanations
+- AI explanation payloads with clearly labeled heuristic fallback
 - Probabilistic prediction bands
 - Kelly-capped and volatility-adjusted sizing
 - Model/data/concept drift detection
 - Interactive backtesting
 - Paper-trading order staging
 - Idempotency and audit controls
+
+Remaining roadmap work:
+
+- Replace heuristic explanations with true SHAP/LIME values when model artifacts are available.
+- Persist diagnostics, explanations and backtest runs in PostgreSQL.
+- Add independent model validation logs, stress scenarios and richer pre-trade compliance checks.
 
 The design principle is:
 

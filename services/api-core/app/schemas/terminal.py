@@ -3,7 +3,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from app.schemas.admin import AdminUser, AuditLogEntry, DomainEventSummary
-from app.schemas.ai import ForecastResponse, RegimeResponse, SignalResponse
+from app.schemas.ai_base import ForecastResponse, RegimeResponse, SignalResponse
 from app.schemas.portfolio import (
     BarbellAllocationResponse,
     PortfolioHistoryPoint,
@@ -62,6 +62,10 @@ class TradingAlgoPredictionBand(BaseModel):
     horizon_days: int
     median_target: float
     expected_return: float
+    target_price: float | None = None
+    stop_price: float | None = None
+    probability_of_target: float | None = None
+    probability_of_stop: float | None = None
     intervals: list[TradingAlgoPredictionInterval]
 
 
@@ -82,6 +86,7 @@ class TradingAlgoModelDiagnostics(BaseModel):
     data_drift_detected: bool
     concept_drift_detected: bool
     market_data_stale: bool
+    regime_mismatch: bool = False
 
 
 class TradingAlgoPositionSizing(BaseModel):
@@ -92,6 +97,8 @@ class TradingAlgoPositionSizing(BaseModel):
     volatility_adjusted_weight: float
     recommended_weight: float
     recommended_notional: float
+    recommended_quantity: float | None = None
+    risk_budget_consumed: float | None = None
     stop_loss: float
     take_profit: float
 
@@ -99,11 +106,18 @@ class TradingAlgoPositionSizing(BaseModel):
 class TradingAlgoBacktestSummary(BaseModel):
     lookback_days: int
     pnl: float
+    annualized_return: float | None = None
     max_drawdown: float
     win_loss_ratio: float
     trade_count: int
     exposure_time: float
+    average_trade: float | None = None
+    fees: float | None = None
+    slippage: float | None = None
     benchmark_return: float
+    excess_return: float | None = None
+    sharpe_ratio: float | None = None
+    sortino_ratio: float | None = None
 
 
 class TradingAlgoSymbolAnalysis(BaseModel):
@@ -124,6 +138,8 @@ class TradingAlgoSymbolAnalysis(BaseModel):
     trend: str
     recommendation: str
     diagnostics: Optional[TradingAlgoModelDiagnostics] = None
+    explanation_source: str = "heuristic_fallback"
+    explained_at: Optional[str] = None
     feature_importance: list[TradingAlgoFeatureContribution] = Field(default_factory=list)
     prediction_bands: list[TradingAlgoPredictionBand] = Field(default_factory=list)
     sizing: Optional[TradingAlgoPositionSizing] = None

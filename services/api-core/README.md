@@ -209,11 +209,11 @@ Test cible:
 venv\Scripts\python.exe -m pytest services\api-core\tests\test_trading_algo_terminal.py -q
 ```
 
-## Planned AI Model Analytics API
+## AI Model Analytics API
 
 La roadmap detaillee est dans [../../docs/ai-trading-model-integration-roadmap.md](/C:/Users/marc/source/projet_trading/docs/ai-trading-model-integration-roadmap.md).
 
-Ces endpoints sont cibles pour le prochain chantier. Ils ne sont pas encore livres dans `api-core`.
+Ces endpoints sont livres dans `api-core` en premiere version deterministe. Ils s'appuient sur `TradingAlgoTerminalService` et etiquettent explicitement les explications de fallback tant que les artefacts SHAP/LIME reels ne sont pas disponibles.
 
 - `GET /api/v1/ai/models/{symbol}/diagnostics`
   - metadonnees modele, `model_version`, `trained_at`, `inference_at`
@@ -236,12 +236,27 @@ Ces endpoints sont cibles pour le prochain chantier. Ils ne sont pas encore livr
   - staging d'ordres papier dans `Pending Orders`
   - seuil de buy probability, guardrails stop-loss/take-profit, idempotence et audit outbox
 
-Contraintes d'implementation:
+Contrat de staging papier:
+
+- `paper_trading_enabled` doit etre explicitement `true`
+- `Idempotency-Key` est obligatoire
+- `X-Tenant-ID` et `X-Correlation-ID` sont propages vers l'audit/outbox
+- les ordres crees restent en statut `pending` avec broker `paper`
+- aucune execution live n'est exposee par ces endpoints
+
+Tests cibles:
+
+```bash
+venv\Scripts\python.exe -m pytest services\api-core\tests\test_trading_algo_terminal.py services\api-core\tests\test_ai_trading_service.py services\api-core\tests\test_ai_routes.py -q
+```
+
+Contraintes d'evolution:
 
 - commencer avec services deterministes et tests sans dependance reseau
 - ne jamais exposer d'execution live automatique sans permission separee
 - valider les guardrails cote API, pas seulement cote frontend
 - propager `X-Tenant-ID`, `X-Correlation-ID` et `Idempotency-Key` pour les operations de staging
+- persister les diagnostics/backtests dans PostgreSQL avant usage institutionnel elargi
 
 ## Alembic
 

@@ -278,13 +278,13 @@ This establishes a stable application boundary between the legacy quant engine a
 
 # 9. AI Integration Strategy
 
-The next AI layer is defined in:
+The AI layer is defined in:
 
 ```text
 docs/ai-trading-model-integration-roadmap.md
 ```
 
-Target capabilities:
+Delivered V1 capabilities:
 
 ### Diagnostics
 
@@ -298,8 +298,7 @@ Target capabilities:
 
 ### Explainability
 
-- SHAP
-- LIME
+- Explanation payloads
 - Clearly labeled heuristic fallback
 
 ### Probabilistic Predictions
@@ -336,26 +335,30 @@ Target capabilities:
 - Idempotency
 - Audit outbox
 
+Remaining hardening:
+
+- true SHAP/LIME values from model artifacts
+- persistent diagnostics and backtest run history
+- independent model validation logs
+- institutional pre-trade compliance checks before broader paper-trading usage
+- live execution, if ever required, under a separately governed permission layer
+
 ---
 
 # 10. Separation of Concerns
 
-The architecture should maintain the following boundaries:
-
 | Layer | Responsibility |
 |---|---|
-| Market Data | Source and freshness |
-| Feature Engineering | Transformations |
-| AI/Quant | Predictions/signals |
-| Explainability | Interpretation |
-| Risk Engine | Limits and constraints |
-| Portfolio Engine | Allocation |
-| Order Service | Order lifecycle |
-| Outbox | Event reliability |
-| Audit | Traceability |
-| UI | Visualization and interaction |
-
-The frontend must not become the source of truth for risk or execution controls.
+| Market Data Feeds | Institutional feeds (Bloomberg B-PIPE, Refinitiv) with freshness monitoring |
+| Feature Engineering | Real-time & historical feature transformations |
+| AI/Quant Engine | Predictions, signal generation & strategy modeling |
+| Explainability & Diagnostics | SHAP/LIME interpretation & model drift monitoring |
+| Enterprise Risk Engine | Server-side pre-trade risk controls, VaR/SVaR limits, concentration checks |
+| Compliance & Mandates | Regulatory compliance, ESG screens, restricted list filtering |
+| Portfolio Engine | Multi-factor optimization, rebalancing & Pro-Forma order staging |
+| OMS / FIX Gateway | FIX Protocol session management, order routing & execution reports |
+| Audit & CAT Logging | Immutable event audit trail for regulatory compliance |
+| UI Cockpit | Institutional cockpit (Next.js), heatmap visualizer & decision submission |
 
 ---
 
@@ -483,27 +486,26 @@ Material trading and portfolio decisions should be reconstructable after the fac
 
 ## Near Term
 
-1. AI diagnostic schemas/services
-2. AI Explanation UI
-3. Prediction bands
-4. Drift/staleness monitoring
-5. Risk-aware sizing
-6. Interactive backtesting
+1. Persist AI diagnostics/backtest artifacts in PostgreSQL
+2. Replace heuristic explanations with SHAP/LIME model artifacts
+3. Calibrate prediction bands against historical forecast errors
+4. Expand drift/staleness monitoring with validation logs
+5. Add institutional pre-trade checks to AI-generated staging
 
 ## Medium Term
 
-7. Paper-trading staging
-8. Persistent backtest artifacts
-9. Persistent AI diagnostics
-10. Expanded screening/model integration
+6. Persistent paper-trading policy artifacts
+7. Expanded screening/model integration
+8. Pro-forma blotter preview with cash and transaction-cost impact
+9. Model stress testing under historical shocks
 
 ## Future
 
-11. More sophisticated portfolio optimization
-12. Multi-model ensembles
-13. Regime-aware allocation
-14. Institutional reporting
-15. A separately governed execution layer, if ever required
+10. More sophisticated portfolio optimization
+11. Multi-model ensembles
+12. Regime-aware allocation
+13. Institutional reporting
+14. A separately governed execution layer, if ever required
 
 ---
 
@@ -511,16 +513,15 @@ Material trading and portfolio decisions should be reconstructable after the fac
 
 A capability is considered institutionally ready only when it has:
 
-- a stable API contract
-- unit tests
-- integration tests where appropriate
-- explicit failure behavior
-- observability
-- auditability where material
-- database migration support where state is persisted
-- frontend handling
-- documented security boundaries
-- documented degraded mode
+- A stable, versioned API contract (`/api/v1`)
+- Unit and integration test coverage across all domains
+- Explicit failure behavior, fallback mode, and observability (Prometheus/Grafana)
+- Auditability adhering to CAT/MiFID II logging requirements
+- Database migration support where state is persisted
+- Pre-trade risk validation enforced at the API boundary
+- Frontend handling including **Heatmap Visualizations** for cross-asset correlations and exposure
+- **Pro-Forma Estimated Order Book Generation:** Before clicking `[Apply Recommended Allocation]`, the platform MUST display an estimated trade blotter (symbol, side, estimated shares, estimated dollar value, slippage estimate)
+- Documented security boundaries and degraded mode
 
 A feature that works only in the UI is not considered complete.
 

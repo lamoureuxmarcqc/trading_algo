@@ -69,6 +69,7 @@ from app.schemas.risk import (
     ScenarioResult,
     ScenarioShock,
 )
+from app.schemas.ai import AiPaperStageRequest, AiPaperStageResponse, AiPaperStageSkip
 from app.schemas.trading import Fill as FillSchema
 from app.schemas.trading import OrderCreate, OrderResponse
 from app.schemas.terminal import (
@@ -102,6 +103,12 @@ class PositionView:
 @dataclass
 class OrderSubmissionResult:
     order: OrderResponse
+    replayed: bool
+
+
+@dataclass
+class PaperStageSubmissionResult:
+    response: AiPaperStageResponse
     replayed: bool
 
 
@@ -782,6 +789,120 @@ class PlatformService:
             order=self._order_schema(order, symbol.ticker, account.broker_name),
             replayed=False,
         )
+
+    def stage_paper_orders(
+        self,
+        payload: AiPaperStageRequest,
+        candidates: list[dict],
+        skipped: list[AiPaperStageSkip],
+        warnings: list[str],
+        *,
+        idempotency_key: str,
+        tenant_id: str = "public",
+        correlation_id: str | None = None,
+    ) -> PaperStageSubmissionResult:
+        fingerprint = self._fingerprint_paper_stage_request(payload, candidates)
+        replayed = self._resolve_idempotent_paper_stage(
+            tenant_id=tenant_id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+        )
+        if replayed is not None:
+            return PaperStageSubmissionResult(
+                response=replayed.model_copy(
+                    update={
+                        "policy_id": payload.policy_id,
+                        "skipped": skipped,
+                        "warnings": warnings,
+                    }
+                ),
+                replayed=True,
+            )
+
+        account = self._default_account()
+        orders: list[OrderResponse] = []
+        event_name = "com.terminal.ai.paper_order.staged.v1"
+        for candidate in candidates:
+            symbol = self._get_or_create_symbol(str(candidate["symbol"]).upper())
+            order = Order(
+                account_id=account.id,
+                symbol_id=symbol.id,
+                side="BUY",
+                order_type="limit",
+                quantity=Decimal(str(candidate["quantity"])),
+                limit_price=Decimal(str(candidate["limit_price"])) if candidate.get("limit_price") is not None else None,
+                stop_price=Decimal(str(candidate["stop_price"])),
+                status="pending",
+                broker_order_id=f"paper-ai-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{symbol.ticker}",
+                strategy_tag=payload.policy_id,
+            )
+            self.db.add(order)
+            self.db.flush()
+            order_schema = self._order_schema(order, symbol.ticker, "paper")
+            orders.append(order_schema)
+            self._publish_domain_event(
+                DomainEvent(
+                    event_name=event_name,
+                    topic="terminal.ai.paper_trading.v1",
+                    aggregate_type="order",
+                    aggregate_id=order.id,
+                    tenant_id=tenant_id,
+                    correlation_id=correlation_id,
+                    payload={
+                        "order_id": order.id,
+                        "symbol": symbol.ticker,
+                        "side": "BUY",
+                        "quantity": float(order.quantity),
+                        "limit_price": float(order.limit_price) if order.limit_price is not None else None,
+                        "stop_price": float(order.stop_price) if order.stop_price is not None else None,
+                        "take_profit_price": candidate.get("take_profit_price"),
+                        "buy_probability": candidate.get("buy_probability"),
+                        "notional": candidate.get("notional"),
+                        "status": "pending",
+                        "broker": "paper",
+                        "policy_id": payload.policy_id,
+                        "warnings": candidate.get("warnings") or [],
+                        "live_execution": False,
+                        "idempotency_key": idempotency_key,
+                    },
+                )
+            )
+            self._audit(
+                event_type=event_name,
+                entity_type="order",
+                entity_id=order.id,
+                actor_email=self.get_current_user().email,
+                details=(
+                    f"PAPER STAGE BUY {float(order.quantity):.4f} {symbol.ticker} "
+                    f"stop {float(order.stop_price) if order.stop_price is not None else 'n/a'} "
+                    f"policy={payload.policy_id}"
+                ),
+                commit=False,
+            )
+
+        resource_id = ",".join(order.id for order in orders) if orders else "none"
+        self.db.add(
+            IdempotencyKey(
+                tenant_id=tenant_id,
+                operation="ai.paper_trading.stage",
+                idempotency_key=idempotency_key,
+                request_fingerprint=fingerprint,
+                resource_type="paper_stage",
+                resource_id=resource_id,
+            )
+        )
+        status = "staged" if orders else "skipped"
+        response = AiPaperStageResponse(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            policy_id=payload.policy_id,
+            status=status,
+            replayed=False,
+            orders=orders,
+            skipped=skipped,
+            warnings=warnings,
+        )
+        self.db.commit()
+        return PaperStageSubmissionResult(response=response, replayed=False)
 
     def list_orders(self) -> list[OrderResponse]:
         orders = (
@@ -1871,6 +1992,73 @@ class PlatformService:
                 "Idempotency-Key points to a missing order resource. Manual investigation required."
             )
         return order
+
+    def _resolve_idempotent_paper_stage(
+        self,
+        *,
+        tenant_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> AiPaperStageResponse | None:
+        record = self.db.scalar(
+            select(IdempotencyKey).where(
+                IdempotencyKey.tenant_id == tenant_id,
+                IdempotencyKey.operation == "ai.paper_trading.stage",
+                IdempotencyKey.idempotency_key == idempotency_key,
+            )
+        )
+        if not record:
+            return None
+        if record.request_fingerprint != request_fingerprint:
+            raise IdempotencyConflictError(
+                "Idempotency-Key already used with a different paper-trading payload."
+            )
+        order_ids = [item for item in record.resource_id.split(",") if item and item != "none"]
+        orders: list[OrderResponse] = []
+        if order_ids:
+            rows = (
+                self.db.execute(
+                    select(Order)
+                    .options(joinedload(Order.symbol), joinedload(Order.account), joinedload(Order.fills))
+                    .where(Order.id.in_(order_ids))
+                )
+                .unique()
+                .scalars()
+                .all()
+            )
+            orders = [self._order_schema(order, order.symbol.ticker, "paper") for order in rows]
+        return AiPaperStageResponse(
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            policy_id="replayed",
+            status="replayed",
+            replayed=True,
+            orders=orders,
+            skipped=[],
+            warnings=[],
+        )
+
+    @staticmethod
+    def _fingerprint_paper_stage_request(payload: AiPaperStageRequest, candidates: list[dict]) -> str:
+        canonical_payload = {
+            "symbols": [symbol.upper() for symbol in payload.symbols],
+            "buy_probability_threshold": round(float(payload.buy_probability_threshold), 8),
+            "max_notional": round(float(payload.max_notional), 8),
+            "max_position_weight": round(float(payload.max_position_weight), 8),
+            "stop_loss": round(float(payload.stop_loss), 8),
+            "take_profit": round(float(payload.take_profit), 8) if payload.take_profit is not None else None,
+            "policy_id": payload.policy_id,
+            "paper_trading_enabled": payload.paper_trading_enabled,
+            "candidates": [
+                {
+                    "symbol": item["symbol"],
+                    "quantity": round(float(item["quantity"]), 8),
+                    "stop_price": round(float(item["stop_price"]), 8),
+                }
+                for item in candidates
+            ],
+        }
+        encoded = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
     def _fingerprint_order_request(payload: OrderCreate) -> str:

@@ -19,7 +19,7 @@ The objective is not to make the AI an autonomous trader. The objective is to ma
 - `POST /api/v1/terminal/trading-algo`
 - Terminal FastAPI integration
 - Next.js integration
-- `analyze`, `compare` and `screen`
+- `analyze`, `compare`, `screen` and `simulate`
 - Price and trend information
 - Recommendation
 - RSI
@@ -28,18 +28,23 @@ The objective is not to make the AI an autonomous trader. The objective is to ma
 - Sharpe
 - VaR
 - Maximum drawdown
+- Model diagnostics API
+- AI explanation API with labeled heuristic fallback
+- Probabilistic prediction bands API
+- Kelly-capped position sizing API
+- Deterministic AI signal backtesting API
+- Paper-trading order staging with idempotency and audit outbox
 
 ### Not Yet Delivered
 
-- Model diagnostics
-- SHAP/LIME explanations
-- Calibrated probabilistic prediction bands
-- Kelly-based sizing
-- Model/data/concept drift monitoring
-- Interactive backtesting
-- Paper-trading order staging
+- True SHAP/LIME values from persisted model artifacts
+- Statistically calibrated probability bands
+- Persistent AI diagnostics/backtest artifacts in PostgreSQL
+- Independent model validation logs and stress-test evidence
+- Expanded pre-trade compliance checks for AI-generated allocations
+- Live execution, which remains outside the current objective
 
-> **Important:** the API contracts below are design targets. They must not be interpreted as currently implemented endpoints.
+> **Important:** the API contracts below are implemented as deterministic V1 endpoints. Outputs that are not backed by live model artifacts are explicitly labeled as heuristic fallback and must not be presented as autonomous trading authority.
 
 ---
 
@@ -311,7 +316,7 @@ Example:
 
 # 9. Target API Contracts
 
-> These endpoints are design targets and are not necessarily implemented.
+> These endpoints are implemented in `api-core` V1 and are served under `/api/v1`.
 
 ## Diagnostics
 
@@ -360,6 +365,13 @@ POST /api/v1/ai/backtests
 ```http
 POST /api/v1/ai/paper-trading/stage
 ```
+
+Operational contract:
+
+- `paper_trading_enabled` must be explicitly `true`.
+- `Idempotency-Key` is required.
+- staged orders remain `pending` with broker `paper`.
+- the API records audit/outbox events and never exposes live execution through this flow.
 
 ---
 
@@ -427,6 +439,12 @@ Minimum AI display:
 | 6 | Paper trading | Staging + idempotency + audit |
 | 7 | Persistence | Diagnostics/backtests stored in PostgreSQL |
 
+Current V1 status:
+
+- Phases 1 through 6 are implemented as deterministic API/UI contracts.
+- Phase 7 remains open.
+- Statistical calibration, real SHAP/LIME artifacts and independent validation remain hardening work before institutional rollout.
+
 ---
 
 # 12. Security & Governance
@@ -443,7 +461,9 @@ The following rules are mandatory:
 8. A frontend toggle must never bypass an API guardrail.
 9. AI explanations must identify their source.
 10. Backtests must be reproducible.
-
+11. **Institutional Pre-Trade Checks:** AI-generated allocations must pass pre-trade compliance checks (restricted lists, liquidity constraints, max turnover) before reaching order staging.
+12. **Pro-Forma Blotter Review:** Any portfolio rebalancing suggested by AI/Quant models must render a trade blotter preview with explicit cash impact, estimated market impact, and transaction cost estimates.
+13. **Model Risk Management (MRM / SR 11-7):** AI models must comply with bank Model Risk Management standards (e.g., Federal Reserve SR 11-7 / OSFI E-23), including independent validation logs, stress testing under historical market shocks, and fallback execution triggers upon drift detection.
 ---
 
 # 13. Acceptance Criteria
