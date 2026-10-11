@@ -75,6 +75,7 @@ apps/web/dist/
 # Environnements locaux
 *.env.local
 *.env.local.example
+!.env.example
 
 
 # PyInstaller
