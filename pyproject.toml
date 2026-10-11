@@ -1,49 +1,12 @@
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "trading-algo"
-version = "1.0.0"
-authors = [
-    {name = "Marc Lamoureux", email = "lamoureuxmarcqc@gmail.com"},
-]
-description = "Système d'analyse et de prédiction boursière avec IA"
-readme = "README.md"
-requires-python = ">=3.8"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-]
-dependencies = [
-    "yfinance>=0.2.28",
-    "pandas>=2.0.0",
-    "numpy>=1.24.0",
-    "requests>=2.31.0",
-    "python-dotenv>=1.0.0",
-    "tensorflow>=2.13.0",
-    "scikit-learn>=1.3.0",
-    "plotly>=5.0.0",
-    "matplotlib>=3.10.0",
-    "lxml>=6.0.2",
-    "kaleido>=1.2.0",
-    "openpyxl>=3.1.3",
-    "dash>=2.14.0",
-    "dash-bootstrap-components>=1.0.0,<2.0.0",
-    "dash-cytoscape>=1.0.0,<2.0.0",
-    "apscheduler>=1.0.0",
-    "redis>=1.0.0",
-    "dash_table>=1.0.0",
-    "dash-ag-grid>=1.0.0",
-    "seaborn>=0.13.0",
-    "SQLAlchemy>=0.0.1",
-    "torch>=0.0.1"
-]
+name = "lamoureux-api-core"
+version = "0.1.0"
+description = "Institutional trading API"
+requires-python = ">=3.10"
 
-[project.optional-dependencies]
-dev = ["black", "flake8", "pytest"]
-deploy = ["dash[cloud]"]
-
-[project.scripts]
-trading-algo = "trading_algo.__main__:main"
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+basetemp = ".pytest_tmp"

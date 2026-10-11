@@ -3,105 +3,107 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **Trading Algo** is a modular quantitative research and trading platform combining market-data extraction, quantitative analytics, machine learning and institutional portfolio/risk infrastructure.
+> **Trading Algo** is the institutional trading vertical of the **LAMOUREUX AI PLATFORM** — a private, modular, model-agnostic AI infrastructure combining market-data extraction, quantitative analytics, machine learning and institutional portfolio/risk infrastructure.
 
 ## Executive Overview
 
-The repository has evolved beyond a standalone trading-analysis package. It now contains two complementary layers:
+The repository is organized as a **two-layer platform**:
 
-1. **Quant Engine — `trading_algo`**
+1. **AI Infrastructure Layer — `services/`**
+   - `ai-gateway` — model-agnostic routing with privacy enforcement
+   - `knowledge` — RAG, embeddings, citations, knowledge graph
+   - `memory` — short-term, long-term, knowledge, decision memory
+   - `orchestrator` — supervisor + specialized agents
+   - `model-registry` — versioning, rollback, comparison
+   - `evaluation` — factuality, hallucination, calibration
+   - `self-improvement` — controlled self-improvement engine
+
+2. **Institutional Trading Layer — `trading_algo` + `services/api-core` + `apps/web`**
    - Market-data extraction and caching
    - Technical and quantitative indicators
    - Screening and comparative analysis
    - Machine-learning experimentation
-   - Interactive research dashboards
-
-2. **Institutional Platform — `services/api-core` + `apps/web`**
    - FastAPI application layer
    - Portfolio, trading, risk and AI domains
-   - PostgreSQL persistence
-   - Redis infrastructure
+   - PostgreSQL persistence, Redis infrastructure
    - Next.js institutional cockpit
    - Event-driven governance and auditability
-   - Risk scenarios and portfolio construction
-   - Integration gateway for `trading_algo`
 
-The strategic objective is to provide a **research → signal → risk → portfolio → paper-trading** workflow while keeping live execution explicitly separated from the AI/research layer.
+The strategic principle:
+
+> **The trading platform is the first vertical agent of the AI infrastructure — not the other way around.**
+>
+> The platform builds the intelligence infrastructure, not just another AI application.
+
+See [`LAMOUREUX_AI_PLATFORM.md`](LAMOUREUX_AI_PLATFORM.md), [`SELF_IMPROVEMENT.md`](SELF_IMPROVEMENT.md), [`docs/hedgefund-platform.md`](docs/hedgefund-platform.md) and [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md).
+
+---
+
+## Self-Improvement Engine
+
+The platform is designed to improve itself — under strict governance.
+
+**Five improvers, one pipeline, seven stages:**
+
+```text
+CODE │ AI │ KNOWLEDGE │ FEATURE │ AGENT
+              ↓
+OBSERVE → DETECT → PROPOSE → SIMULATE → REVIEW → DEPLOY → EVALUATE
+                                                    ↓
+                                              KEEP / ROLLBACK
+```
+
+**Non-negotiable rules:**
+
+- No self-deployment without human review.
+- No modification of security, risk, orders or audit without double validation.
+- No automatic knowledge deletion.
+- No live trading access for improvers.
+- Every change is reversible, tested, auditable.
+- Rate limiting and circuit breakers enforced.
+
+See [`SELF_IMPROVEMENT.md`](SELF_IMPROVEMENT.md) for the full architecture.
 
 ---
 
 ## Current Platform Status
+
+### AI Infrastructure Layer
+
+| Capability | Status | Notes |
+|---|---|---|
+| AI Gateway (model abstraction) | 🟡 Scaffolding | Privacy-enforced routing |
+| Knowledge Layer (RAG) | 🟡 Scaffolding | pgvector + hybrid retrieval |
+| Memory Layer (4 niveaux) | 🟡 Scaffolding | Short / long / knowledge / decision |
+| Agent Orchestrator | 🟡 Scaffolding | Supervisor + vertical agents |
+| Model Registry | 🔴 Planned | Versioning + rollback |
+| Evaluation Framework | 🔴 Planned | Factuality + hallucination |
+| Self-Improvement Engine | 🔴 Planned | 5 improvers + 7-stage pipeline |
+| Local LLM Runtime (Ollama) | 🟡 Scaffolding | Local-first by default |
+| GPU Inference (vLLM) | 🔴 Planned | Phase 6 — distributed |
+| Data Classification Engine | 🟡 Scaffolding | 5 niveaux + enforcement |
+| Audit Trail unifié | ✅ Available | Outbox + events |
+
+### Institutional Trading Layer
 
 | Capability | Status | Notes |
 |---|---|---|
 | Quantitative analysis | ✅ Available | `trading_algo` engine |
 | `analyze` / `compare` / `screen` | ✅ Available | Exposed through terminal/API |
 | FastAPI institutional API | ✅ Available | `/api/v1` |
-| Next.js cockpit | ✅ Available | CIO / portfolio / risk / research / trading / admin surfaces |
-| PostgreSQL persistence | ✅ Available | Institutional schema + Alembic foundation |
+| Next.js cockpit | ✅ Available | CIO / portfolio / risk / research / trading / admin |
+| PostgreSQL persistence | ✅ Available | Institutional schema + Alembic |
 | Redis infrastructure | ✅ Available | Local Docker stack |
 | Correlation / stress analysis | ✅ Available | Risk domain |
 | Barbell allocation | ✅ Available | API + portfolio cockpit |
 | Idempotent order creation | ✅ Available | API-level control |
 | Persistent outbox | ✅ Available | Event governance |
-| AI diagnostics | ✅ Available | Version, confidence, accuracy, staleness, drift flags |
+| AI diagnostics | ✅ Available | Version, confidence, accuracy, staleness, drift |
 | Probabilistic prediction bands | ✅ Available | 50% / 80% / 95%, 1D / 5D / 30D |
 | AI position sizing | ✅ Available | Kelly-capped + volatility-adjusted |
 | Interactive backtesting | ✅ Available | PnL, drawdown, benchmark, costs |
 | Paper-trading staging | ✅ Available | Guardrails + idempotence + audit |
-| Live automated execution | 🔴 Not a current objective | Must remain separately permissioned |
-
-See [`docs/hedgefund-platform.md`](docs/hedgefund-platform.md) and [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md).
-
----
-
-## Core Capabilities
-
-### Institutional Enterprise & Compliance Layer (JPMorgan / RBC Grade)
-
-- **Enterprise Connectivity:** Order Management System (OMS) & Execution Management System (EMS) gateways via FIX Protocol (4.2/4.4/5.0).
-- **Pre-Trade Risk Engine:** Hard-stop risk controls including fat-finger thresholds, counterparty limits, single-issuer exposure limits, and Stressed VaR (SVaR).
-- **Regulatory Audit & CAT Traceability:** Nanosecond-precision event logging adhering to MiFID II / Consolidated Audit Trail (CAT) guidelines for full decision chain reconstruction.
-- **Enterprise IAM & Security:** Multi-tenant architecture with RBAC (Role-Based Access Control), SSO (OAuth2/OIDC, SAML 2.0), and audit trails.
-- **Performance Attribution & Reporting:** Barra/Brinson multi-factor attribution models and automated PDF/HTML market monitor reporting (Factsheet generation).
-
-### Quantitative Research
-
-- Market-data extraction through `yfinance`
-- Local caching to reduce repeated API calls
-- S&P 500 screening
-- Technical indicators and risk statistics
-- Comparative analysis across securities
-- Interactive Plotly/Dash reporting
-
-### Machine Learning
-
-Current experimentation includes:
-
-- **LSTM** for time-series modelling
-- **CatBoost**
-- **SVR**
-- **MLP**
-- **Linear Regression**
-- Auto-ML-style model selection through `find_best_model.py`
-
-The AI layer now exposes first-pass deterministic diagnostics, probabilistic predictions, explainability, risk-aware sizing, backtesting and paper-trading staging APIs. These contracts are intentionally bounded: live execution remains outside the AI permission surface.
-
-### Institutional Platform
-
-The institutional layer currently provides:
-
-- FastAPI domain services
-- PostgreSQL persistence
-- Redis infrastructure
-- Next.js cockpit
-- Health/readiness/metrics endpoints
-- Correlation and tenant identifiers
-- Persistent order idempotency
-- Event outbox and retry mechanisms
-- Risk scenarios and portfolio correlations
-- Barbell portfolio allocation
-- Trading Algo integration
+| Live automated execution | 🔴 Not a current objective | Separately permissioned |
 
 ---
 
@@ -109,35 +111,50 @@ The institutional layer currently provides:
 
 ```text
 .
+├── AGENTS.md                        # Codex instructions
+├── SELF_IMPROVEMENT.md              # Self-improvement architecture
+├── LAMOUREUX_AI_PLATFORM.md         # Strategic AI platform blueprint
+├── README.md
 ├── trading_algo/                    # Quantitative research and ML engine
-│   ├── data/                        # Market-data extraction
-│   ├── models/                      # ML architectures and training
-│   ├── preprocessing/               # Cleaning, scaling and feature pipelines
-│   ├── screening/                   # Universe screening
-│   ├── visualization/               # Charts and reporting
-│   ├── web_dashboard/               # Dash interface
+│   ├── data/
+│   ├── models/
+│   ├── preprocessing/
+│   ├── screening/
+│   ├── visualization/
+│   ├── web_dashboard/
 │   ├── __init__.py
 │   └── __main__.py
 │
 ├── services/
-│   └── api-core/                    # FastAPI institutional backend
+│   ├── api-core/                    # FastAPI institutional backend
+│   ├── ai-gateway/                  # Model-agnostic routing + privacy
+│   ├── knowledge/                   # RAG + embeddings + citations
+│   ├── memory/                      # Multi-layer memory
+│   ├── orchestrator/                # Agent supervisor
+│   ├── model-registry/              # Model versioning
+│   ├── evaluation/                  # Factuality + hallucination
+│   └── self-improvement/            # Controlled self-improvement
 │
 ├── apps/
 │   └── web/                         # Next.js institutional cockpit
 │
 ├── docs/
-│   ├── architecture/                # Architecture, ADRs and governance
-│   ├── hedgefund-platform.md        # Platform blueprint
+│   ├── architecture/
+│   │   └── adr/
+│   ├── hedgefund-platform.md
 │   └── ai-trading-model-integration-roadmap.md
 │
 ├── infra/
-│   └── docker/                      # Local infrastructure
+│   ├── docker/
+│   ├── ollama/
+│   ├── vllm/
+│   └── monitoring/
 │
-├── models_saved/                    # Trained models / scalers / reports
-├── dashboards/                      # Generated HTML dashboards
-├── logs/                            # Runtime logs
+├── models_saved/
+├── dashboards/
+├── logs/
 ├── pyproject.toml
-└── .env                             # Local secrets/configuration — never commit
+└── .env
 ```
 
 ---
@@ -176,13 +193,104 @@ pip install -e .
 
 ### 4. Configure environment variables
 
-Create `.env` from the available example when present:
-
 ```bash
 cp .env.example .env
 ```
 
 > Never commit API keys, credentials or production secrets.
+
+### 5. Start the local AI infrastructure
+
+```bash
+docker compose -f infra/docker/docker-compose.yml up -d
+```
+
+---
+
+## AI Gateway
+
+All model calls go through a single abstraction layer:
+
+```python
+from ai_gateway import AIGateway, DataClassification
+
+gw = AIGateway()
+response = await gw.inference(
+    prompt="Analyse ce document...",
+    classification=DataClassification.HIGHLY_CONFIDENTIAL,
+    tenant_id="lamoureux",
+)
+```
+
+Routing rules:
+
+| Classification | Allowed targets |
+|---|---|
+| `PUBLIC` | LOCAL, LOCAL_GPU, REMOTE |
+| `INTERNAL` | LOCAL, LOCAL_GPU, REMOTE |
+| `CONFIDENTIAL` | LOCAL, LOCAL_GPU |
+| `HIGHLY_CONFIDENTIAL` | LOCAL, LOCAL_GPU |
+| `RESTRICTED` | LOCAL only |
+
+The gateway enforces these rules **before** any network call.
+
+---
+
+## Knowledge Layer (RAG)
+
+Ingest documents, then query with citations:
+
+```http
+POST /api/v1/knowledge/ingest
+{
+  "file_path": "reports/NVDA_Q3.pdf",
+  "tenant_id": "lamoureux",
+  "classification": "CONFIDENTIAL"
+}
+```
+
+```http
+POST /api/v1/knowledge/query
+{
+  "query": "Quels sont les risques principaux de NVDA?",
+  "tenant_id": "lamoureux",
+  "top_k": 5
+}
+```
+
+Response includes `sources` with `document_id`, `page`, `excerpt`, and a `confidence` score.
+
+---
+
+## Memory Layer
+
+Four memory types, strictly separated:
+
+| Type | Storage | Purpose |
+|---|---|---|
+| `SHORT_TERM` | Redis | Conversation context |
+| `LONG_TERM` | PostgreSQL | Validated facts |
+| `KNOWLEDGE` | pgvector / Qdrant | Indexed documents |
+| `DECISION` | PostgreSQL | Decisions + outcomes + evaluation |
+
+Decision memory is immutable — a recorded decision can only be evaluated, never modified.
+
+---
+
+## Self-Improvement
+
+```http
+GET  /api/v1/improvement/proposals
+POST /api/v1/improvement/proposals/{id}/simulate
+POST /api/v1/improvement/proposals/{id}/approve
+POST /api/v1/improvement/proposals/{id}/reject
+POST /api/v1/improvement/proposals/{id}/deploy
+POST /api/v1/improvement/proposals/{id}/rollback
+```
+
+Every improvement passes through: OBSERVE → DETECT → PROPOSE → SIMULATE → REVIEW → DEPLOY → EVALUATE.
+
+No auto-deployment. No exceptions.
 
 ---
 
@@ -237,8 +345,7 @@ Supported commands:
 - `analyze`
 - `compare`
 - `screen`
-
-The integration currently exposes price, trend, recommendation, RSI, moving averages, volatility, Sharpe, VaR and maximum drawdown.
+- `simulate`
 
 ---
 
@@ -246,69 +353,9 @@ The integration currently exposes price, trend, recommendation, RSI, moving aver
 
 The next major product layer is documented in [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md).
 
-Delivered first-pass capabilities include:
-
-- Model versioning and confidence
-- Historical directional accuracy
-- MAE / RMSE
-- Signal Sharpe
-- AI explanation payloads with clearly labeled heuristic fallback
-- Probabilistic prediction bands
-- Kelly-capped and volatility-adjusted sizing
-- Model/data/concept drift detection
-- Interactive backtesting
-- Paper-trading order staging
-- Idempotency and audit controls
-
-Remaining roadmap work:
-
-- Replace heuristic explanations with true SHAP/LIME values when model artifacts are available.
-- Persist diagnostics, explanations and backtest runs in PostgreSQL.
-- Add independent model validation logs, stress scenarios and richer pre-trade compliance checks.
-
-The design principle is:
+The design principle:
 
 > **AI generates research and decision support; risk controls remain deterministic and enforceable at the API boundary.**
-
----
-
-## Web Dashboard
-
-The repository also includes the existing Dash research interface.
-
-```bash
-python start.py
-```
-
-or:
-
-```bash
-python -m trading_algo.web_dashboard.app
-```
-
-Typical local address:
-
-```text
-http://127.0.0.1:8050
-```
-
-Useful environment variables:
-
-- `DEBUG`
-- `WEB_HOST`
-- `WEB_PORT`
-- `REDIS_URL`
-- `REDIS_URI`
-
-### Troubleshooting
-
-If dashboard tabs fail to load:
-
-1. Inspect startup logs for import failures.
-2. Check heavy dependencies such as TensorFlow.
-3. Verify `assets/` and `assets/custom.css`.
-4. Use browser DevTools → Network.
-5. Inspect `/_dash-layout` and `/_dash-update-component` responses.
 
 ---
 
@@ -327,14 +374,6 @@ If an existing database is already manually aligned:
 ```bash
 alembic stamp head
 ```
-
-Recommended workflow:
-
-1. Modify SQLAlchemy models.
-2. Generate a migration.
-3. Review the generated migration.
-4. Test it against a representative database.
-5. Apply with `alembic upgrade head`.
 
 ---
 
@@ -360,30 +399,38 @@ Before considering a feature complete, validate:
 - Frontend build
 - Fallback/degraded mode
 - Risk and order guardrails
+- AI privacy enforcement (classification → routing)
 
 ---
 
 ## Operational Principles
 
-### 1. Research ≠ Execution
+### 1. Local First
+Sensitive data stays local by default. Any remote call requires an explicit classification decision.
 
-Research models must not directly obtain unrestricted live-order authority.
+### 2. Model Agnostic
+No dependency on a single provider. The AI Gateway abstracts local (Ollama, vLLM) and remote providers.
 
-### 2. Risk Controls Are Server-Side
+### 3. Research ≠ Execution
+Research models must not obtain unrestricted live-order authority.
 
-Critical controls must be enforced by the API, not only by the frontend.
+### 4. Risk Controls Are Server-Side
+Critical controls are enforced by the API, not by the frontend.
 
-### 3. Auditability Is a First-Class Requirement
+### 5. Auditability Is a First-Class Requirement
+Order staging, critical decisions and business events are traceable.
 
-Order staging, critical decisions and business events should be traceable.
+### 6. Safe Degradation
+The frontend may fall back to an explicit snapshot when the API is unavailable. Degraded data must be labeled.
 
-### 4. Safe Degradation
+### 7. No False Precision
+AI predictions expose confidence, freshness and source. No point forecast is presented as certainty.
 
-The frontend may fall back to an explicit snapshot when the API is unavailable. The UI must clearly identify degraded data.
+### 8. Human in the Loop
+High-classification decisions and all improvements require explicit validation.
 
-### 5. No False Precision
-
-AI predictions must expose confidence and data/model freshness rather than presenting point forecasts as certainty.
+### 9. Self-Improvement Is Governed
+Every improvement is observed, proposed, simulated, validated, deployed, evaluated, reversible and audited.
 
 ---
 
@@ -391,20 +438,15 @@ AI predictions must expose confidence and data/model freshness rather than prese
 
 | Document | Purpose |
 |---|---|
-| [`docs/hedgefund-platform.md`](docs/hedgefund-platform.md) | Institutional platform architecture and current capabilities |
-| [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md) | AI integration roadmap and acceptance criteria |
+| [`AGENTS.md`](AGENTS.md) | Codex instructions |
+| [`SELF_IMPROVEMENT.md`](SELF_IMPROVEMENT.md) | Self-improvement architecture |
+| [`LAMOUREUX_AI_PLATFORM.md`](LAMOUREUX_AI_PLATFORM.md) | Strategic AI platform blueprint |
+| [`docs/hedgefund-platform.md`](docs/hedgefund-platform.md) | Institutional platform architecture |
+| [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md) | AI integration roadmap |
 | [`docs/architecture/README.md`](docs/architecture/README.md) | Architecture standards |
 | [`docs/architecture/api-governance.md`](docs/architecture/api-governance.md) | API governance |
 | [`docs/architecture/event-governance.md`](docs/architecture/event-governance.md) | Event/outbox governance |
 | [`docs/architecture/adr/README.md`](docs/architecture/adr/README.md) | Architecture Decision Records |
-
----
-
-## Outputs and Artifacts
-
-- `models_saved/` — trained models, scalers and performance reports
-- `dashboards/` — interactive HTML dashboards
-- `logs/` — operational and error logs
 
 ---
 

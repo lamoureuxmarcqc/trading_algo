@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-
+from datetime import datetime, timezone
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 if str(SERVICE_ROOT) not in sys.path:
@@ -18,7 +18,9 @@ from app.services.trading_algo_terminal import TradingAlgoTerminalService  # noq
 
 class FakeExtractor:
     def get_historical_data(self, symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
-        dates = pd.date_range("2026-01-01", periods=260, freq="D")
+       
+        end = pd.Timestamp(datetime.now(tz=timezone.utc))
+        dates = pd.date_range(end=end, periods=260, freq="D")
         base = 100 if symbol == "AAPL" else 80
         step = 0.35 if symbol == "AAPL" else 0.12
         close = pd.Series([base + step * idx for idx in range(len(dates))], index=dates)
@@ -44,6 +46,7 @@ class FakeExtractor:
 
 def _service() -> AiTradingService:
     terminal = TradingAlgoTerminalService(extractor=FakeExtractor())
+
     return AiTradingService(terminal)
 
 

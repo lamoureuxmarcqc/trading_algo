@@ -23,6 +23,8 @@ __pycache__/
 *$py.class
 *.pyc
 .vscode/
+.pytest_tmp/
+.pytest_cache/
 
 # Si c'est un projet Next.js (très probable avec webpackChunk_N_E)
 .next/
