@@ -1,12 +1,26 @@
 [project]
-name = "lamoureux-api-core"
+name = "trading-algo-platform"
 version = "0.1.0"
 description = "Institutional trading API"
 requires-python = ">=3.10"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+norecursedirs = [
+    "services",
+    "apps",
+    "infra",
+    "docs",
+    "node_modules",
+    ".venv",
+    "venv",
+    ".git",
+    "models_saved",
+    "dashboards",
+    "logs",
+    ".pytest_tmp",
+    ".pytest_cache",
+]
+addopts = "--basetemp=.pytest_tmp"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-basetemp = ".pytest_tmp"
