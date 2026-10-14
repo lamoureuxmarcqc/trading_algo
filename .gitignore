@@ -102,6 +102,8 @@ coverage.xml
 *.py,cover
 *.xlsx
 *.csv
+*.pkl
+*.keras
 scripts/*.sh
 .hypothesis/
 .pytest_cache/

@@ -54,14 +54,12 @@ services:
       - "11434:11434"
     volumes:
       - ollamadata:/root/.ollama
-    # GPU optionnel — décommenter si NVIDIA
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_NUM_THREADS=8
 
   # ─────────────────────────────── AI Infrastructure ─────────────────────
   ai-gateway:
