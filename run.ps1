@@ -100,3 +100,15 @@ switch ($Command.ToLower()) {
     "clean-docker" { docker builder prune -f; docker system prune -f }
     default { Write-Host "Inconnu: $Command" -ForegroundColor Red; Show-Help }
 }
+
+
+# Tests knowledge (48)
+cd C:\Users\marc\source\projet_trading\services\knowledge
+pytest -q
+
+# Puis chaque autre service
+cd ..\memory          ; pytest -q
+cd ..\orchestrator    ; pytest -q
+cd ..\model-registry  ; pytest -q
+cd ..\evaluation      ; pytest -q
+cd ..\self-improvement; pytest -q
