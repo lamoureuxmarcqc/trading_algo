@@ -163,6 +163,24 @@ def extract_markdown(path: Path) -> ExtractedDocument:
     )
 
 
+# ─────────────────────────────── Texte brut ────────────────────────
+
+def extract_text(path: Path) -> ExtractedDocument:
+    """Fichier texte brut (UTF-8, fallback ignore errors)."""
+    content = path.read_text(encoding="utf-8", errors="ignore")
+    if not content.strip():
+        return ExtractedDocument(
+            filename=path.name,
+            mime_type="text/plain",
+            pages=[],
+        )
+    return ExtractedDocument(
+        filename=path.name,
+        mime_type="text/plain",
+        pages=[ExtractedPage(text=content.strip())],
+    )
+
+
 # ─────────────────────────────── Dispatcher ────────────────────────
 
 EXTRACTORS = {
@@ -170,6 +188,7 @@ EXTRACTORS = {
     ".docx": extract_docx,
     ".html": extract_html,
     ".htm": extract_html,
+    ".txt": extract_text,
     ".md": extract_markdown,
     ".markdown": extract_markdown,
 }
