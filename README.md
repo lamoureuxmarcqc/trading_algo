@@ -174,7 +174,7 @@ Windows:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.\venv\Scripts\Activate.ps1
 ```
 
 Linux/macOS:
@@ -440,7 +440,7 @@ Every improvement is observed, proposed, simulated, validated, deployed, evaluat
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | Codex instructions |
 | [`SELF_IMPROVEMENT.md`](SELF_IMPROVEMENT.md) | Self-improvement architecture |
-| [`LAMOUREUX_AI_PLATFORM.md`](LAMOUREUX_AI_PLATFORM.md) | Strategic AI platform blueprint |
+| [`docs/LAMOUREUX_AI_PLATFORM.md`](LAMOUREUX_AI_PLATFORM.md) | Strategic AI platform blueprint |
 | [`docs/hedgefund-platform.md`](docs/hedgefund-platform.md) | Institutional platform architecture |
 | [`docs/ai-trading-model-integration-roadmap.md`](docs/ai-trading-model-integration-roadmap.md) | AI integration roadmap |
 | [`docs/architecture/README.md`](docs/architecture/README.md) | Architecture standards |

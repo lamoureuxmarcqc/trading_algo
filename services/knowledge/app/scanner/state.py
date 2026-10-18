@@ -219,7 +219,7 @@ def get_scanned_file(source_id: str, path: str) -> dict | None:
     try:
         row = session.execute(
             text("""
-                SELECT id, sha256, document_id, status
+                SELECT id, sha256, document_id, status, size_bytes, modified_at
                 FROM scanned_files
                 WHERE source_id = :source_id AND path_hash = :path_hash
             """),
@@ -235,9 +235,14 @@ def get_scanned_file(source_id: str, path: str) -> dict | None:
             "sha256": row.sha256,
             "document_id": str(row.document_id) if row.document_id else None,
             "status": row.status,
+            "size_bytes": row.size_bytes,
+            "modified_at": row.modified_at,
         }
     finally:
         session.close()
+
+
+VALID_STATUSES = {"ingested", "skipped", "dry_run", "error", "corrupted"}
 
 
 def record_file(
@@ -251,6 +256,11 @@ def record_file(
     status: str,
     error_message: str | None = None,
 ) -> None:
+    if status not in VALID_STATUSES:
+        raise ValueError(
+            f"status invalide : {status!r}. Attendu : {sorted(VALID_STATUSES)}"
+        )
+
     from sqlalchemy import text
 
     session = get_session()

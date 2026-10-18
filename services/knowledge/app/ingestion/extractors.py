@@ -38,6 +38,18 @@ class ExtractedDocument:
 # ─────────────────────────────── PDF ───────────────────────────────
 
 def extract_pdf(path: Path) -> ExtractedDocument:
+    # Verifier la signature PDF avant tout
+    try:
+        with open(path, "rb") as f:
+            header = f.read(5)
+    except OSError as e:
+        raise ExtractionError(f"Lecture impossible : {e}") from e
+
+    if header != b"%PDF-":
+        raise ExtractionError(
+            f"Fichier non-PDF (header={header!r}, attendu b'%PDF-')"
+        )
+
     try:
         reader = PdfReader(str(path))
     except Exception as e:

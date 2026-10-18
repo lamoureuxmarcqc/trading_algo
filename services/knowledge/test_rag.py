@@ -1,11 +1,7 @@
-﻿from app.retrieval.hybrid import search
+﻿@'
+from app.retrieval.hybrid import search
 
-queries = [
-    "mandat",
-    "signature",
-    "date",
-    "contrat",
-]
+queries = ["mandat", "signature", "date", "contrat"]
 
 for q in queries:
     print(f"\n=== Query: {q} ===")
@@ -21,3 +17,6 @@ for q in queries:
     for r in results:
         print(f"  Score: {r['rrf_score']:.4f} | Doc: {r['document_id'][:8]}... | Page: {r.get('page')}")
         print(f"  {r['content'][:150]}...")
+'@ | Set-Content -Path "test_rag.py" -Encoding UTF8
+
+python test_rag.py
