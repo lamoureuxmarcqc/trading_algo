@@ -1,22 +1,15 @@
-﻿@'
-from app.retrieval.hybrid import search
+﻿from app.retrieval.hybrid import search
 
-queries = ["mandat", "signature", "date", "contrat"]
+queries = ["chapitre", "présentation", "rapport", "PSA"]
 
 for q in queries:
-    print(f"\n=== Query: {q} ===")
+    print(f"\n=== {q} ===")
     results = search(
         query=q,
         tenant_id="lamoureux",
         allowed_classifications=["HIGHLY_CONFIDENTIAL", "CONFIDENTIAL"],
         top_k=2,
     )
-    if not results:
-        print("  Aucun resultat")
-        continue
     for r in results:
-        print(f"  Score: {r['rrf_score']:.4f} | Doc: {r['document_id'][:8]}... | Page: {r.get('page')}")
-        print(f"  {r['content'][:150]}...")
-'@ | Set-Content -Path "test_rag.py" -Encoding UTF8
-
-python test_rag.py
+        print(f"  Score: {r['rrf_score']:.4f} | Page: {r.get('page')}")
+        print(f"  {r['content'][:200]}...")

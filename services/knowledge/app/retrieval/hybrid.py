@@ -32,11 +32,33 @@ def _rrf_fuse(
         else:
             chunks[cid] = {**r, "keyword_rank": rank + 1}
 
-    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+    # Filtrer les chunks de mauvaise qualite
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+    filtered: list[tuple[str, float]] = []
+    for cid, score in ranked:
+        content = chunks[cid].get("content", "")
+        # Rejeter si :
+        # - moins de 50 caracteres
+        # - moins de 40% de lettres alphanumeriques (trop de ponctuation/symboles)
+        # Detecter le double-encoding dans le chunk
+        alpha = [c for c in content if c.isalpha()]
+        if len(alpha) > 20:
+            doubles = sum(1 for i in range(len(alpha) - 1) if alpha[i] == alpha[i + 1])
+            if doubles / (len(alpha) - 1) > 0.3:
+                continue
+        if len(content) < 50:
+            continue
+        alnum = sum(1 for c in content if c.isalnum())
+        if alnum / len(content) < 0.4:
+            continue
+        filtered.append((cid, score))
+        if len(filtered) >= top_k:
+            break
 
     return [
         {**chunks[cid], "rrf_score": score}
-        for cid, score in ranked
+        for cid, score in filtered
     ]
 
 
