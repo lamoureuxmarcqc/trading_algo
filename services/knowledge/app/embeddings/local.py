@@ -36,7 +36,14 @@ def _load_model(model_name: str):
 
     logger.info("Chargement du modele d'embedding : %s", model_name)
     model = SentenceTransformer(model_name)
-    logger.info("Modele charge (dim=%s)", model.get_sentence_embedding_dimension())
+    # Sentence-transformers >3.0 renomme get_sentence_embedding_dimension
+    # en get_embedding_dimension. On supporte les deux pour compatibilite.
+    try:
+        dim = model.get_embedding_dimension()
+    except AttributeError:
+        dim = model.get_sentence_embedding_dimension()
+
+    logger.info("Modele charge (dim=%s)", dim)
     return model
 
 
