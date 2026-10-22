@@ -74,6 +74,7 @@ See [`SELF_IMPROVEMENT.md`](SELF_IMPROVEMENT.md) for the full architecture.
 |---|---|---|
 | AI Gateway (model abstraction) | 🟡 Scaffolding | Privacy-enforced routing |
 | Knowledge Layer (RAG) | 🟡 Scaffolding | pgvector + hybrid retrieval |
+| Knowledge Layer (RAG) | 🟡 Phase 2c livrée (reranker), 2d–2f à venir | pgvector + hybrid + reranker local |
 | Memory Layer (4 niveaux) | 🟡 Scaffolding | Short / long / knowledge / decision |
 | Agent Orchestrator | 🟡 Scaffolding | Supervisor + vertical agents |
 | Model Registry | 🔴 Planned | Versioning + rollback |
@@ -205,6 +206,17 @@ cp .env.example .env
 docker compose -f infra/docker/docker-compose.yml up -d
 ```
 
+### 6. Start the local AI infrastructure
+
+```
+.\run.ps1 up            # Démarrer la stack
+.\run.ps1 warmup        # Précharger Ollama (753 ms → 2.4s)
+.\run.ps1 smoke         # Vérifier que le LLM répond
+.\run.ps1 test          # Tester les 44 tests
+.\run.ps1 health        # Statut gateway
+.\run.ps1 policy        # Matrice privacy
+.\run.ps1 down          # Arrêter la stack
+```
 ---
 
 ## AI Gateway

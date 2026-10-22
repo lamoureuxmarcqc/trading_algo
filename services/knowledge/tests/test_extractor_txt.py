@@ -24,4 +24,8 @@ def test_extract_text_empty(tmp_path: Path):
 def test_extract_dispatch_txt(tmp_path: Path):
     p = tmp_path / "d.txt"
     p.write_text("abc", encoding="utf-8")
-    doc = extract(d)
+    doc = extract(p)
+    assert doc.filename == "d.txt"
+    assert doc.mime_type == "text/plain"
+    assert len(doc.pages) == 1
+    assert doc.pages[0].text == "abc"

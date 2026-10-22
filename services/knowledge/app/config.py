@@ -14,10 +14,18 @@ class Settings(BaseSettings):
     chunk_overlap_ratio: float = 0.10
     chunk_min_tokens: int = 50
 
+    log_level: str = "INFO"
+
+    # Retrieval + reranking
     retrieval_top_k: int = 10
     rerank_top_k: int = 5
-
-    log_level: str = "INFO"
+    rerank_enabled: bool = True                                # ← AJOUT
+    rerank_backend: str = "cross_encoder"                      # ← AJOUT
+    rerank_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"  # ← AJOUT
+    rerank_candidates: int = 30                                # ← AJOUT
+    rerank_batch_size: int = 16                                # ← AJOUT
+    rerank_device: str | None = None                           # ← AJOUT
+    rerank_min_confidence: float = 0.05        # ← 0.15 → 0.05
 
 
 settings = Settings()

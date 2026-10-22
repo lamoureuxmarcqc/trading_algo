@@ -8,6 +8,7 @@ from ..config import settings
 from ..embeddings.local import embed_passages
 from ..ingestion.pipeline import ingest_file
 from ..models import DataClassification
+from ..retrieval.keyword import invalidate_cache
 from ..storage.pgvector import insert_document
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,10 @@ def process_file(
         metadata={"source_path": str(file_path)},
         chunks=chunks_payload,
     )
+
+    # Invalider le cache BM25 : sinon les nouveaux chunks ne sont jamais
+    # indexes par keyword_search jusqu'au redemarrage du process.
+    invalidate_cache()
 
     return {
         "document_id": document_id,

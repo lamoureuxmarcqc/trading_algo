@@ -6,7 +6,7 @@ def _chunk(cid: str, content: str = "") -> dict:
     return {
         "chunk_id": cid,
         "document_id": f"doc-{cid}",
-        "content": content or f"content {cid}",
+        "content": content or f"contenu de test pour le chunk {cid}, assez long pour passer les filtres de qualité.",
         "page": 1,
         "section": None,
         "classification": "INTERNAL",
