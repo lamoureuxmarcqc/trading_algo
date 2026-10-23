@@ -12,11 +12,16 @@ Usage :
 from app.retrieval.hybrid import search
 
 # Requetes naturelles (pas des mots-cles) pour tester le cross-encoder
+# QUERIES = [
+#    "Quelle est la démarche d'ingénierie des besoins proposée ?",
+#    "Que contient le rapport de réingénierie de Jean-Pierre Vickoff ?",
+#    "Comment fonctionne le service de workflow ?",
+#    "Quels sont les chapitres de la thèse sur l'ingénierie des besoins ?",
+#]
 QUERIES = [
-    "Quelle est la démarche d'ingénierie des besoins proposée ?",
-    "Que contient le rapport de réingénierie de Jean-Pierre Vickoff ?",
-    "Comment fonctionne le service de workflow ?",
-    "Quels sont les chapitres de la thèse sur l'ingénierie des besoins ?",
+    "Quel est le montant de l'avis de cotisation ?",
+    "Quelles sont les garanties d'électroménagers ?",
+    "Quel est le bilan financier ?",
 ]
 
 TENANT = "lamoureux"
