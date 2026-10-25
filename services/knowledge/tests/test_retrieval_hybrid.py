@@ -74,3 +74,18 @@ def test_rrf_score_decreases():
 
     scores = [r["rrf_score"] for r in result]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_hybrid_result_can_carry_a_structured_citation():
+    from app.retrieval.hybrid import _attach_citations
+
+    result = _attach_citations([{**_chunk("a"), "confidence": 0.5}])[0]
+
+    assert result["citation"] == {
+        "document_id": "doc-a",
+        "chunk_id": "a",
+        "page": 1,
+        "section": None,
+        "excerpt": result["content"],
+        "score": 0.5,
+    }

@@ -306,7 +306,34 @@ Une tâche n'est complète que si :
 - ❌ Supprimer automatiquement de la connaissance ou du code
 - ❌ Sauter un étage du pipeline d'auto-amélioration
 
+## Sécurité — Règles pour les secrets
+## Sécurité — Credentials
+## ** JAMAIS dans le NAS** :
+- Mots de passe en clair
+- Fichiers `.key`, `.pem`, `.env` avec secrets
+- Tokens API
+- Clés privées
+
+## ** TOUJOURS dans Bitwarden** (ou KeePassXC) :
+- Mots de passe de comptes
+- Clés API
+- Réponses aux questions de sécurité
+
+**Patterns d'exclusion obligatoires** dans les scan_sources :
+
+**Avant tout scan d'un nouveau dossier** :
+
+1. Vérifier manuellement le contenu des `.txt` courts (< 2 KB) :
+   ```powershell
+   Get-ChildItem $path -Recurse -Filter "*.txt" -File |
+       Where-Object { $_.Length -lt 2000 } |
+       Select-String -Pattern "(?i)(password|mot de passe|login|username)\s*[:=]" |
+       Select-Object Path, Line
 ---
+SELECT d.filename FROM documents d
+JOIN chunks c ON c.document_id = d.id
+WHERE c.content ~* '(password\s*[:=]|mot\s+de\s+passe\s*[:=])'
+  AND LENGTH(c.content) < 500;
 
 ## 11. Commandes utiles
 

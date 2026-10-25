@@ -1,6 +1,8 @@
 """Tests unitaires du reranker (Phase 2c) — sans réseau, sans modèle."""
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from app.retrieval import reranker
@@ -52,15 +54,18 @@ def test_rerank_preserves_fields_and_adds_provenance() -> None:
     assert top["rrf_score"] == 0.01  # rétrocompatibilité
     assert top["rrf_confidence"] == 0.8
     assert top["rerank_score"] == 0.7
-    assert top["confidence"] == 0.7
+    assert top["confidence"] == pytest.approx(1.0 / (1.0 + math.exp(-0.7)))
     assert top["pre_rerank_rank"] == 2
     assert top["rerank_source"] == "cross_encoder"
     assert top["confidence_source"] == "cross_encoder"
 
 
-def test_confidence_is_clamped_to_unit_interval() -> None:
+def test_confidence_is_sigmoid_bounded_in_unit_interval() -> None:
     out = rerank("q", [_cand("a", "x"), _cand("b", "y")], top_k=2, scorer=_FixedScorer([5.0, -3.0]))
-    assert [r["confidence"] for r in out] == [1.0, 0.0]
+    assert [r["confidence"] for r in out] == pytest.approx([
+        1.0 / (1.0 + math.exp(-5.0)),
+        1.0 / (1.0 + math.exp(3.0)),
+    ])
     assert out[0]["rerank_score"] == 5.0  # score brut conservé
 
 

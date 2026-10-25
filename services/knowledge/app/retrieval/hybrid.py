@@ -10,6 +10,7 @@ from ..embeddings.local import embed_query
 from . import keyword as keyword_search
 from . import reranker
 from . import vector as vector_search
+from .citations import to_source
 
 logger = logging.getLogger("lamoureux_ai.knowledge.retrieval.hybrid")
 
@@ -119,6 +120,21 @@ def _rrf_fuse(
     ]
 
 
+def _attach_citations(results: list[dict]) -> list[dict]:
+    """Ajoute une citation structuree a chaque resultat, sans perdre les champs RRF.
+
+    Cette etape est volontairement executee apres le reranking optionnel afin
+    que ``citation.score`` corresponde toujours a la confiance finale exposee.
+    """
+    return [
+        {
+            **result,
+            "citation": to_source(result).model_dump(),
+        }
+        for result in results
+    ]
+
+
 def search(
     *,
     query: str,
@@ -152,14 +168,15 @@ def search(
         top_k=_candidate_pool(k),
     )
     if not _rerank_enabled():
-        return fused
-    return reranker.rerank(
+        return _attach_citations(fused)
+    reranked = reranker.rerank(
         query,
         fused,
         top_k=k,
         scorer=_build_scorer(),
         min_confidence=float(_cfg("rerank_min_confidence", 0.20)),
     )
+    return _attach_citations(reranked)
 
 async def search_async(
     *,
@@ -199,11 +216,12 @@ async def search_async(
         top_k=_candidate_pool(k),
     )
     if not _rerank_enabled():
-        return fused
-    return await reranker.rerank_async(
+        return _attach_citations(fused)
+    reranked = await reranker.rerank_async(
         query,
         fused,
         top_k=k,
         scorer=_build_scorer(),
         min_confidence=float(_cfg("rerank_min_confidence", 0.20)),
     )
+    return _attach_citations(reranked)

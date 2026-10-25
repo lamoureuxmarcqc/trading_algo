@@ -34,6 +34,8 @@ class QueryRequest(BaseModel):
 
 
 class Source(BaseModel):
+    """Citation exacte d'un chunk retourne par la recherche hybride."""
+
     document_id: str
     chunk_id: str
     page: int | None = None
@@ -43,7 +45,14 @@ class Source(BaseModel):
 
 
 class QueryResponse(BaseModel):
+    """Reponse RAG sans generation directe de LLM.
+
+    Le Knowledge Layer retourne les evidences citees. Une synthese eventuelle
+    doit etre produite par un appel distinct passant par AI Gateway.
+    """
+
     query: str
+    answer: str | None = None
     sources: list[Source]
     confidence: float | None = None
 

@@ -73,8 +73,7 @@ See [`SELF_IMPROVEMENT.md`](SELF_IMPROVEMENT.md) for the full architecture.
 | Capability | Status | Notes |
 |---|---|---|
 | AI Gateway (model abstraction) | 🟡 Scaffolding | Privacy-enforced routing |
-| Knowledge Layer (RAG) | 🟡 Scaffolding | pgvector + hybrid retrieval |
-| Knowledge Layer (RAG) | 🟡 Phase 2c livrée (reranker), 2d–2f à venir | pgvector + hybrid + reranker local |
+| Knowledge Layer (RAG) | 🟡 Phases 2c–2d livrées, 2e–2f à venir | pgvector + hybrid + reranker local opt-in + citations |
 | Memory Layer (4 niveaux) | 🟡 Scaffolding | Short / long / knowledge / decision |
 | Agent Orchestrator | 🟡 Scaffolding | Supervisor + vertical agents |
 | Model Registry | 🔴 Planned | Versioning + rollback |

@@ -1,8 +1,8 @@
-# Knowledge Layer — Phase 2c : Reranker cross-encoder
+# Knowledge Layer — Phases 2c–2d : reranking et citations
 
 **Date :** 2026-10-20
-**Statut :** livré, à valider sur la stack réelle (voir §6)
-**Périmètre :** `services/knowledge/app/retrieval/`
+**Statut :** Phase 2c livrée (validation stack reelle restante), Phase 2d livree et couverte par tests unitaires
+**Périmètre :** `services/knowledge/app/retrieval/`, `app/models.py`
 
 ---
 
@@ -56,7 +56,17 @@ Pour activer, ajouter ces champs à `Settings` (`services/knowledge/app/config.p
 
 ## 6. Validation
 
-**Fait (sandbox, 2026-10-20)** : 17 / 17 tests verts (`test_reranker.py` + `test_hybrid_rerank.py`), avec modules `config`, `embeddings`, `keyword`, `vector` remplacés par des stubs.
+**Fait (suite standard, 2026-10-25)** : 57 tests verts depuis la racine du depot :
+
+```powershell
+.\venv\Scripts\python.exe -m pytest services\knowledge\tests -q
+```
+
+Cette suite comprend les tests de citations et verifie que la configuration
+isole les variables d'environnement des autres services. Les 17 tests de
+reranking historiques restent dans `app/test/` et ne font pas partie du
+`testpaths` standard ; ils doivent etre executes sur une machine ou
+l'executueur de threads Python est disponible pour valider le chemin async.
 
 **Non vérifié — à exécuter dans le dépôt :**
 
@@ -73,8 +83,30 @@ Test end-to-end sur les 34 documents ingérés :
 
 Le choix du modèle multilingue par défaut est une hypothèse (corpus FR/EN) : à confirmer par la comparaison avant/après ci-dessus.
 
-## 7. Suite
+## 7. Phase 2d — Citations automatiques
 
-- **2d** — Citations automatiques (`document_id`, `page`, extrait exact, confiance).
-- **2e** — API FastAPI `/api/v1/knowledge/*`.
-- **2f** — Docker + intégration.
+Chaque resultat de retrieval peut maintenant etre converti par
+`app.retrieval.citations.build_sources()` en une liste de `Source` Pydantic
+ordonnee par pertinence. Une citation expose :
+
+- `document_id` et `chunk_id` pour retrouver l'evidence ;
+- `page` et `section` lorsqu'elles sont disponibles ;
+- `excerpt`, prefixe literal du chunk (500 caracteres par defaut, sans
+  reecriture) ;
+- `score`, confiance de retrieval bornee dans `[0, 1]`.
+
+Ce score est un signal de retrieval, pas une probabilite calibree. La
+calibration reste du ressort du framework Evaluation. Le Knowledge Layer ne
+genere pas de synthese via un LLM : le champ `answer` du contrat
+`QueryResponse` est explicitement nul tant qu'une synthese n'a pas ete creee
+par un flux distinct passant par AI Gateway.
+
+Les citations sont construites seulement apres les filtres tenant et
+classification executes par le retrieval. Elles ne peuvent donc pas elargir
+le perimetre des documents accessibles.
+
+## 8. Suite
+
+- **2e** — API FastAPI `/api/v1/knowledge/*` avec authentification et
+  propagation du tenant avant exposition du service.
+- **2f** — Docker + integration.

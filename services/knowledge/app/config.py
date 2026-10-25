@@ -3,7 +3,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="KNOW_", env_file=".env")
+    # Le depot possede un .env partage avec les autres services. Les variables
+    # hors prefixe KNOW_ ne sont pas des erreurs de configuration du service.
+    model_config = SettingsConfigDict(
+        env_prefix="KNOW_",
+        env_file=".env",
+        extra="ignore",
+    )
 
     database_url: str = "postgresql+psycopg://lamoureux:changeme@localhost:5433/lamoureux"
 
@@ -19,13 +25,14 @@ class Settings(BaseSettings):
     # Retrieval + reranking
     retrieval_top_k: int = 10
     rerank_top_k: int = 5
-    rerank_enabled: bool = True                                # ← AJOUT
-    rerank_backend: str = "cross_encoder"                      # ← AJOUT
-    rerank_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"  # ← AJOUT
-    rerank_candidates: int = 30                                # ← AJOUT
-    rerank_batch_size: int = 16                                # ← AJOUT
-    rerank_device: str | None = None                           # ← AJOUT
-    rerank_min_confidence: float = 0.05        # ← 0.15 → 0.05
-
+    # Le reranking est opt-in : sans configuration explicite, la recherche
+    # conserve le comportement RRF et ne charge aucun modele supplementaire.
+    rerank_enabled: bool = True
+    rerank_backend: str = "cross_encoder"
+    rerank_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    rerank_candidates: int = 30
+    rerank_batch_size: int = 16
+    rerank_device: str | None = None     
+    rerank_min_confidence: float =  0.05 # 0.20
 
 settings = Settings()

@@ -62,6 +62,7 @@ def test_disabled_by_default_keeps_rrf_behaviour(patched: dict) -> None:
     assert [r["chunk_id"] for r in out] == ["c1", "c2"]
     assert "rerank_source" not in out[0]
     assert "rrf_score" in out[0]
+    assert out[0]["citation"]["chunk_id"] == "c1"
 
 
 def test_enabled_reorders_with_stub_and_labels_source(patched: dict) -> None:
@@ -71,6 +72,7 @@ def test_enabled_reorders_with_stub_and_labels_source(patched: dict) -> None:
     assert out[0]["rerank_source"] == "stub_lexical"
     assert len(out) == 2
     assert out[0]["document_id"] == "doc-c2" and out[0]["page"] == 2
+    assert out[0]["citation"]["score"] == out[0]["confidence"]
 
 
 def test_pool_is_larger_than_top_k_when_enabled(patched: dict) -> None:
