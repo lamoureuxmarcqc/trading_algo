@@ -111,6 +111,56 @@ def _clean_control_chars(text: str) -> str:
 
     return "".join(cleaned)
 
+
+def _extract_pdf_ocr(path: Path) -> list[ExtractedPage]:
+    """Extrait le texte d'un PDF image via OCR (Tesseract + pdf2image)."""
+    try:
+        from pdf2image import convert_from_path
+        import pytesseract
+    except ImportError as e:
+        raise ExtractionError(
+            "OCR non disponible. pip install pytesseract pdf2image"
+        ) from e
+
+    # Windows : pointer vers l'exe installé + tessdata utilisateur
+    import os
+    if os.name == "nt":
+        # 1. Exe Tesseract
+        for candidate in (
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ):
+            if os.path.exists(candidate):
+                pytesseract.pytesseract.tesseract_cmd = candidate
+                break
+
+        # 2. Dossier tessdata (contient fra + eng + osd)
+        local_tessdata = os.path.join(os.environ["USERPROFILE"], "tessdata")
+        if os.path.isdir(local_tessdata):
+            # Tesseract lit cette variable pour trouver les langues
+            os.environ["TESSDATA_PREFIX"] = local_tessdata
+
+    try:
+        images = convert_from_path(str(path), dpi=200)
+    except Exception as e:
+        raise ExtractionError(f"Conversion PDF -> images échouée : {e}") from e
+
+    if not images:
+        raise ExtractionError("Aucune page extraite du PDF")
+
+    pages: list[ExtractedPage] = []
+    for i, image in enumerate(images, start=1):
+        try:
+            text = pytesseract.image_to_string(image, lang="fra+eng")
+        except Exception:
+            text = ""
+        text = _clean_control_chars(text)
+        text = text.strip()
+        if text and len(text) > 20:
+            pages.append(ExtractedPage(text=text, page=i))
+
+    return pages
+
 # ─────────────────────────────── PDF ───────────────────────────────
 
 def extract_pdf(path: Path) -> ExtractedDocument:
@@ -155,11 +205,30 @@ def extract_pdf(path: Path) -> ExtractedDocument:
     except Exception as e:
         raise ExtractionError(f"PDF illisible : {e}") from e
 
+    # Fallback OCR si pymupdf n'a rien trouvé (PDF scanné)
+    # Fallback OCR si pymupdf n'a rien trouvé (PDF scanné)
+    if not pages:
+        import logging
+        logger = logging.getLogger(__name__)
+        try:
+            pages = _extract_pdf_ocr(path)
+            extractor_used = "pymupdf+ocr"
+        except ExtractionError as ocr_err:
+            logger.warning(
+                "OCR failed for %s: %s",
+                path.name,
+                ocr_err,
+            )
+            extractor_used = "pymupdf"
+    else:
+        extractor_used = "pymupdf"
+    
+
     return ExtractedDocument(
         filename=path.name,
         mime_type="application/pdf",
         pages=pages,
-        metadata={"page_count": page_count, "extractor": "pymupdf"},
+        metadata={"page_count": page_count, "extractor": extractor_used},
     )
 
 # ─────────────────────────────── DOCX ──────────────────────────────
@@ -181,10 +250,9 @@ def extract_docx(path: Path) -> ExtractedDocument:
         # Heading = section marker
         if para.style and para.style.name.startswith("Heading"):
             if paragraphs:
-                text = _clean_control_chars(text)
                 pages.append(
                     ExtractedPage(
-                        text="\n".join(paragraphs),
+                        text=_clean_control_chars("\n".join(paragraphs)),
                         section=current_section,
                     )
                 )
