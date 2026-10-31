@@ -1,5 +1,26 @@
 """Tests du superviseur."""
-from app.supervisor import classify_task, route
+import asyncio
+
+import pytest
+
+from app.agents.base import Agent, AgentConfig
+from app.supervisor import AgentBudgetExceededError, Supervisor, classify_task, route
+
+
+class RecordingFinanceAgent(Agent):
+    def __init__(self, budget_tokens: int) -> None:
+        super().__init__(
+            AgentConfig(
+                name="finance",
+                budget_tokens=budget_tokens,
+                timeout_seconds=5,
+            )
+        )
+        self.was_called = False
+
+    async def run(self, task: str, context: dict) -> dict:
+        self.was_called = True
+        return {"status": "ok", "task": task}
 
 
 def test_classify_finance():
@@ -16,3 +37,14 @@ def test_classify_research_default():
 
 def test_route_returns_agent():
     assert route("Investir dans AAPL") == "finance"
+
+
+def test_supervisor_rejects_task_that_exceeds_agent_token_budget():
+    agent = RecordingFinanceAgent(budget_tokens=10)
+    supervisor = Supervisor({"finance": agent})
+    task = "action un deux trois quatre cinq six sept huit neuf dix"
+
+    with pytest.raises(AgentBudgetExceededError, match="budget"):
+        asyncio.run(supervisor.run(task))
+
+    assert agent.was_called is False

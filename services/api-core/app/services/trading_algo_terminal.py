@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 import math
 from typing import Any, Iterable
 
+import httpx
 import numpy as np
 import pandas as pd
 
@@ -17,7 +19,15 @@ from app.schemas.terminal import (
     TradingAlgoPredictionBand,
     TradingAlgoPredictionInterval,
     TradingAlgoSymbolAnalysis,
+    TerminalKnowledgeQueryResponse,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+class KnowledgeQueryError(RuntimeError):
+    """Raised when the local Knowledge service cannot satisfy a terminal query."""
 
 
 class TradingAlgoTerminalService:
@@ -25,11 +35,15 @@ class TradingAlgoTerminalService:
 
     DEFAULT_SCREEN_UNIVERSE = ["AAPL", "MSFT", "NVDA", "AMZN", "META", "JPM", "XOM", "LLY"]
     ALLOWED_COMMANDS = {"analyze", "compare", "screen", "simulate"}
+    KNOWLEDGE_QUERY_URL = "http://localhost:8002/api/v1/knowledge/query"
+    KNOWLEDGE_CLASSIFICATION_MAX = "CONFIDENTIAL"
+    KNOWLEDGE_TIMEOUT_SECONDS = 5.0
 
     def __init__(
         self,
         extractor: Any | None = None,
         risk_manager: Any | None = None,
+        http_client: httpx.Client | None = None,
     ) -> None:
         if extractor is None:
             from trading_algo.data.data_extraction import StockDataExtractor
@@ -42,6 +56,34 @@ class TradingAlgoTerminalService:
 
         self.extractor = extractor
         self.risk_manager = risk_manager
+        self._http_client = http_client
+
+    def query_knowledge(
+        self,
+        *,
+        query: str,
+        tenant_id: str,
+        top_k: int = 5,
+    ) -> TerminalKnowledgeQueryResponse:
+        """Query the local Knowledge API with a server-enforced classification ceiling."""
+        payload = {
+            "query": query,
+            "tenant_id": tenant_id,
+            "top_k": top_k,
+            "classification_max": self.KNOWLEDGE_CLASSIFICATION_MAX,
+        }
+        client = self._http_client or httpx.Client(timeout=self.KNOWLEDGE_TIMEOUT_SECONDS)
+        close_client = self._http_client is None
+        try:
+            response = client.post(self.KNOWLEDGE_QUERY_URL, json=payload)
+            response.raise_for_status()
+            return TerminalKnowledgeQueryResponse.model_validate(response.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("knowledge_query_failed tenant_id=%s error=%s", tenant_id, exc)
+            raise KnowledgeQueryError("Knowledge service is unavailable or returned an invalid response") from exc
+        finally:
+            if close_client:
+                client.close()
 
     def run(self, payload: TradingAlgoCommandRequest) -> TradingAlgoCommandResponse:
         command = payload.command.strip().lower()

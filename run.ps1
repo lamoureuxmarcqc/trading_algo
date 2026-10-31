@@ -51,6 +51,16 @@ function Run-Tests($Path, $Label) {
     } finally { Pop-Location }
 }
 
+function Invoke-API {
+    Write-Host "Demarrage de l'API knowledge (port 8002)..." -ForegroundColor Cyan
+    Push-Location "$ROOT\services\knowledge"
+    try {
+        uvicorn app.main:app --host 0.0.0.0 --port 8002
+    } finally {
+        Pop-Location
+    }
+}
+
 switch ($Command.ToLower()) {
     "help" { Show-Help }
     "up" { Write-Host "Demarrage..." -ForegroundColor Cyan; Run-In $DOCKER_DIR { docker compose up -d }; Write-Host "OK" -ForegroundColor Green }
@@ -59,6 +69,7 @@ switch ($Command.ToLower()) {
     "logs" { Run-In $DOCKER_DIR { docker compose logs -f } }
     "ps" { Run-In $DOCKER_DIR { docker compose ps } }
     "pull-model" { docker exec lamoureux-ollama ollama pull $OLLAMA_MODEL }
+    "api" { Invoke-API }
     "warmup" {
         Write-Host "Warmup Ollama ($OLLAMA_MODEL)..." -ForegroundColor Cyan
         $body = "{`"model`":`"$OLLAMA_MODEL`",`"prompt`":`"hi`",`"stream`":false}"

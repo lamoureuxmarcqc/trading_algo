@@ -22,6 +22,7 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000/api/v1
 - `/research`
 - `/trading`
 - `/admin`
+- `/knowledge`
 
 ## Console trading-algo
 
@@ -32,6 +33,11 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000/api/v1
   - `compare`
   - `screen`
 - Resultats affiches: prix, tendance, recommandation, daily return, total return, volatilite 20 jours, Sharpe, VaR 95 et RSI.
+
+## Recherche documentaire
+
+- `/knowledge` interroge l'API Knowledge locale et affiche les extraits cites,
+  leur page et leur score de retrieval.
 
 ## Strategie de resilience
 

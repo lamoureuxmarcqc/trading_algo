@@ -469,7 +469,8 @@ Every improvement is observed, proposed, simulated, validated, deployed, evaluat
 4. Add tests for behavioral changes.
 5. Update relevant documentation.
 6. Open a Pull Request.
-
+note : vous pouvez aujourd'hui utiliser un modèle local (llama3.2:3b), demain un modèle open-weight plus puissant (Qwen, Gemma),
+ou un modèle via API, sans changer une ligne de code applicatif. C'est la garantie de ne jamais être verrouillé.
 ---
 
 ## License

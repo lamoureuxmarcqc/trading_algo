@@ -55,6 +55,7 @@ Seed inclus par défaut :
 - `GET /api/v1/terminal`
 - `GET /api/v1/terminal/snapshot`
 - `POST /api/v1/terminal/trading-algo`
+- `POST /api/v1/terminal/knowledge`
 - `GET /api/v1/health`
 - `GET /api/v1/ready`
 - `GET /api/v1/metrics`
@@ -202,6 +203,13 @@ La reponse contient:
 - `errors` pour les symboles non recuperables sans bloquer les autres resultats
 
 Le panneau web **Trading Algo / Analysis Console** consomme cet endpoint directement depuis `/api/v1/terminal`.
+
+## Knowledge Terminal Bridge
+
+`POST /api/v1/terminal/knowledge` relaie une requete documentaire vers le
+service Knowledge local. Le tenant est derive du header `X-Tenant-ID`; le
+terminal impose `classification_max=CONFIDENTIAL` cote serveur et ne permet
+pas au client de demander `RESTRICTED`.
 
 Test cible:
 
