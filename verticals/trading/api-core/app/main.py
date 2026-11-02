@@ -1,5 +1,13 @@
+"""FastAPI entrypoint for the trading vertical."""
 import logging
+import sys
 from pathlib import Path
+
+# ─── Bootstrap: make `trading_algo` importable from verticals/trading/ ───
+_VERTICAL_ROOT = Path(__file__).resolve().parents[2]  # → verticals/trading/
+if str(_VERTICAL_ROOT) not in sys.path:
+    sys.path.insert(0, str(_VERTICAL_ROOT))
+# ─────────────────────────────────────────────────────────────────────────
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,6 +62,12 @@ def create_app() -> FastAPI:
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> RedirectResponse:
         return RedirectResponse(url="/terminal-assets/favicon.svg")
+
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request, exc):
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
     return app
 

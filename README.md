@@ -165,7 +165,8 @@ See [`SELF_IMPROVEMENT.md`](SELF_IMPROVEMENT.md) for the full architecture.
 
 ```bash
 git clone https://github.com/lamoureuxmarcqc/trading_algo.git
-cd trading_algo
+pip install -e verticals/trading/trading_algo
+
 ```
 
 ### 2. Create a virtual environment
