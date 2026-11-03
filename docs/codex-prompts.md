@@ -104,6 +104,88 @@ Ouvre une PR intitulée "phase-2: knowledge-layer".
 
 ---
 
+## Phase 2e–2f — Knowledge API + Docker
+
+```
+Lis AGENTS.md et knowledge-reranker.md (section 7 — Phase 2d livrée).
+
+Contexte : services/knowledge/ fonctionne en CLI (ingestion + retrieval + reranker
++ citations). Les phases 2a–2d sont livrées. La phase 2e (API FastAPI) et 2f
+(Docker + intégration) restent à faire.
+
+Tâche : Phase 2e–2f — Exposer le Knowledge Layer via FastAPI et l'intégrer à Docker.
+
+## Phase 2e — API FastAPI
+
+1. Créer services/knowledge/app/api/__init__.py
+2. Créer services/knowledge/app/api/main.py (app FastAPI séparée de app/main.py CLI) :
+   - GET  /health                          → {"status":"ok","version":"0.1.0"}
+   - GET  /v1/policy                       → classifications autorisées par tenant
+   - POST /api/v1/knowledge/ingest         → ingestion (file_path, classification, tenant_id)
+   - POST /api/v1/knowledge/query          → retrieval + citations (query, tenant_id, top_k, classification_max)
+   - GET  /api/v1/knowledge/documents/{id} → métadonnées d'un document
+3. Middleware :
+   - X-Correlation-ID (généré si absent, répercuté en réponse)
+   - X-Tenant-ID obligatoire sur /api/v1/knowledge/*
+   - Refus 403 si tenant_id manquant ou classification demandée > classification du document
+4. Modèles Pydantic dans app/api/models.py :
+   - IngestRequest(file_path, tenant_id, classification)
+   - IngestResponse(document_id, chunks_count, classification)
+   - QueryRequest(query, tenant_id, top_k=5, classification_max="INTERNAL")
+   - QueryResponse(answer: None, sources: list[Source], confidence: float)
+   - Source(document_id, chunk_id, page, section, excerpt, score)
+5. app/citations.build_sources() est déjà livré (Phase 2d) — l'utiliser tel quel.
+6. Le champ `answer` du QueryResponse reste **explicitement None** (pas de
+   synthèse LLM dans le Knowledge Layer — la synthèse passe par AI Gateway).
+7. Tests dans services/knowledge/tests/test_api.py :
+   - POST /ingest avec PDF fixture → 200, document_id retourné
+   - POST /query après ingestion → sources non vides, confidence ∈ [0,1]
+   - POST /query sans X-Tenant-ID → 422
+   - POST /query avec classification_max="PUBLIC" sur doc CONFIDENTIAL → 0 source
+   - GET /health → 200
+   - GET /v1/policy → matrice correcte
+
+## Phase 2f — Docker + intégration
+
+1. Créer services/knowledge/Dockerfile :
+   - python:3.11-slim
+   - pip install -r requirements.txt
+   - EXPOSE 8002
+   - CMD uvicorn app.api.main:app --host 0.0.0.0 --port 8002
+2. Ajouter au infra/docker/docker-compose.yml un service `knowledge` :
+   - build: context ../../services/knowledge
+   - ports: 8002:8002
+   - env: DATABASE_URL, HF_HUB_OFFLINE=1, TENANT_DEFAULT=platform-admin
+   - depends_on: postgres (healthy), qdrant (started)
+   - healthcheck: GET /health
+3. Documenter dans services/knowledge/README.md :
+   - commande de lancement local (hors Docker) : uvicorn app.api.main:app --port 8002
+   - commande Docker : docker compose up knowledge
+   - variables d'environnement
+4. Mettre à jour apps/web-platform/README.md section 4 (lib/api.ts) :
+   - NEXT_PUBLIC_KNOWLEDGE_URL=http://localhost:8002 (déjà prévu)
+
+## Contraintes
+
+- Aucune modification du comportement CLI existant (app/main.py reste intact).
+- Aucun appel LLM dans services/knowledge (synthèse = AI Gateway).
+- La classification est héritée du document, jamais devinée.
+- RESTRICTED refusé si tenant mismatch.
+- Le reranker reste opt-in (rerank_enabled=False par défaut).
+- Tests verts sans réseau (mock embeddings si nécessaire).
+- Type hints partout.
+- Aucun secret commité.
+
+## Definition of Done
+
+- pytest services/knowledge/tests -q → tous verts (y compris les 57 existants)
+- docker compose up knowledge → GET /health 200
+- curl POST /api/v1/knowledge/query avec un document ingéré → sources + confidence
+- README services/knowledge mis à jour
+
+Ouvre une PR intitulée "phase-2ef: knowledge-api-docker".
+```
+
 ## Phase 3 — Memory Layer
 
 ```
@@ -436,7 +518,7 @@ Règles :
 
 Ouvre une PR intitulée "phase-12: distributed-gpu".
 ```
-```
+
 
 ---
 
@@ -447,7 +529,7 @@ Ouvre une PR intitulée "phase-12: distributed-gpu".
 | 1 | `services/ai-gateway/` complet | ✅ Fonctionnel | Débloque tout le reste |
 | 2 | `infra/docker/docker-compose.yml` | ✅ Fonctionnel | Stack locale en 1 commande |
 | 3 | 6 ADRs fondateurs | ✅ Complets | Gouvernance posée |
-| 4 | Prompts Codex 13 phases | ✅ Prêts | Développement piloté |
+| 4 | Prompts Codex 14 phases | ✅ Prêts | Développement piloté |
 
 ## Démarrage en 3 commandes
 
@@ -467,12 +549,14 @@ cd ../../services/ai-gateway && pip install -r requirements.txt && pytest
 - **AI Gateway opérationnel** avec enforcement privacy testé
 - **Stack Docker** PostgreSQL+pgvector, Redis, Qdrant, Ollama
 - **6 ADRs** qui figent les décisions structurantes
-- **13 prompts Codex** pour enchaîner phases 0 → 12 sans réfléchir
+- **14 prompts Codex** pour enchaîner phases 0 → 12 (incluant 2e–2f knowledge API)
 
 ## Prochaine action concrète
 
-```bash
+bash
 git checkout -b phase-0/foundations
 # copier les fichiers livrés
 git add . && git commit -m "phase-0: foundations"
 # puis prompt Codex Phase 0
+
+---

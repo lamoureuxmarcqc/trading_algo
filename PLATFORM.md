@@ -224,9 +224,10 @@ Un vertical est une **application** qui :
 │   ├── crm/                          (planifié)
 │   └── cnesst/                       (pilote)
 │
-├── apps/                             ← UI transversales
-│   └── web-platform/                 ← portail de la plateforme
-│                                         (sélection de verticale, admin, agents)
+├── apps/                             ← UI TRANSVERSALES DE LA PLATEFORME
+│   ├── web-platform/                 ← portail (sélection verticale, admin, agents)
+│   ├── admin/                        ← control plane compliance/RBAC/audit (planifié)
+│   └── mobile/                       ← monitoring/approvals mobile (planifié)
 │
 ├── docs/
 │   ├── architecture/
@@ -247,7 +248,7 @@ Un vertical est une **application** qui :
 ├── infra/
 │   └── docker/
 │
-└── tests/
+└── tests/ 
 ```
 
 ---

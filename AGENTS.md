@@ -88,37 +88,75 @@ Principe directeur :
 
 ## 5. Structure cible du repository
 
-```text
+> **Mise à jour 2026-11-02 (post-séparation `platform-v1.0-merged`).**
+> L'ancienne structure (`services/api-core`, `apps/web`, `trading_algo/` à la racine)
+> n'est plus valide. Codex doit créer et modifier des fichiers uniquement dans
+> l'arborescence ci-dessous.
+
+``
 .
 ├── AGENTS.md
+├── PLATFORM.md
 ├── SELF_IMPROVEMENT.md
 ├── LAMOUREUX_AI_PLATFORM.md
 ├── README.md
-├── trading_algo/
-├── services/
-│   ├── api-core/
+│
+├── services/                        ← INFRASTRUCTURE PLATEFORME (générique)
 │   ├── ai-gateway/
 │   ├── knowledge/
 │   ├── memory/
 │   ├── orchestrator/
 │   ├── model-registry/
 │   ├── evaluation/
-│   └── self-improvement/
-├── apps/
-│   └── web/
+│   ├── self-improvement/
+│   └── audit/                       ← à créer (trail unifié)
+│
+├── verticals/                       ← VERTICALES MÉTIER
+│   ├── trading/                     ← premier vertical (mature)
+│   │   ├── trading_algo/
+│   │   ├── api-core/
+│   │   ├── web/
+│   │   └── agents/
+│   ├── lawyer/                      ← scaffold (README)
+│   ├── doctor/                      ← scaffold (README)
+│   ├── crm/                         ← scaffold (README)
+│   └── cnesst/                      ← pilote (à implémenter Phase 14)
+│
+├── apps/                            ← UI TRANSVERSALES DE LA PLATEFORME
+│   ├── web-platform/                ← portail plateforme (Phase 13)
+│   ├── admin/                       ← control plane compliance/RBAC/audit (planifié)
+│   └── mobile/                      ← monitoring/approvals mobile (planifié)
+│
 ├── docs/
 │   ├── architecture/
-│   │   └── adr/
+│   │   └── adr/                     ← ADR-001 à ADR-006
+│   ├── platform/
+│   │   ├── README.md                ← frontière plateforme/verticals
+│   │   ├── ai-gateway.md
+│   │   ├── knowledge.md
+│   │   ├── memory.md
+│   │   └── orchestrator.md
+│   ├── verticals/
+│   │   ├── trading.md
+│   │   ├── lawyer.md
+│   │   ├── doctor.md
+│   │   ├── crm.md
+│   │   └── cnesst.md
 │   ├── hedgefund-platform.md
 │   └── ai-trading-model-integration-roadmap.md
+│
 ├── infra/
 │   ├── docker/
 │   ├── ollama/
 │   ├── vllm/
 │   └── monitoring/
-└── tests/
-```
-
+│
+├── scripts/                         ← scripts de séparation (historique)
+│   ├── separate_platform.py
+│   ├── separate_phase2.py
+│   └── separate_phase3.py
+│
+└── tests/                           ← tests transverses racine
 ---
 
 ## 6. Conventions de code
