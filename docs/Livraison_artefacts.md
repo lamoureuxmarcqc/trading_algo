@@ -1638,3 +1638,419 @@ git checkout -b phase-0/foundations
 git add . && git commit -m "phase-0: foundations"
 # puis prompt Codex Phase 0
 ```
+
+
+---
+
+# 📄 Document 2 — `Livraison_artefacts.md` (mis à jour)
+
+Je conserve l'esprit « livrer ce qui débloque aujourd'hui », mais j'ajoute une **section 0** (état livré par la séparation) et je mets à jour les chemins et les prompts Codex pour refléter la nouvelle arborescence `verticals/` / `services/`.
+
+```markdown
+# Livraison des artefacts — État au 2026-11-02
+
+> Cette version remplace la précédente. Depuis le tag `platform-v1.0-merged`, l'infrastructure est dans `services/`, les verticales dans `verticals/`, et le portail plateforme dans `apps/web-platform/`.
+
+Livraison par ordre de valeur immédiate.
+
+0. **Séparation plateforme/verticales — LIVRÉE** (commit `91b90c3`)
+1. `services/ai-gateway/` — scaffold fonctionnel (inchangé)
+2. `infra/docker/docker-compose.yml` — stack locale (inchangé, voir note `api-core` ci-dessous)
+3. 6 ADRs fondateurs (inchangés)
+4. Prompts Codex — **mis à jour pour la nouvelle arborescence**
+
+---
+
+# 📦 Artefact 0/4 — Séparation plateforme/verticales (LIVRÉE)
+
+## Statut
+
+| Élément | Valeur |
+|---|---|
+| Branche mergée | `refactor/platform-vs-verticals` → `main` |
+| Commit de merge | `91b90c3` |
+| Tags | `platform-v1.0`, `platform-v1.0-merged`, `pre-separation` |
+| Tests `api-core` | 37 / 37 passed |
+| Smoke API | `/health` 200, `/terminal/snapshot` 200 |
+| Smoke cockpit | `GET / 200` |
+| Secrets dans le commit | Aucun (vérifié par `git show \| Select-String`) |
+| Rapport de validation | `validation-report.md` (2026-11-02) |
+
+## Arborescence livrée
+
+```text
+.
+├── apps/
+│   └── web-platform/              ← portail plateforme (README seul, à implémenter)
+├── services/                      ← INFRASTRUCTURE PLATEFORME
+│   ├── ai-gateway/
+│   ├── knowledge/
+│   ├── memory/
+│   ├── orchestrator/
+│   ├── model-registry/
+│   ├── evaluation/
+│   └── self-improvement/
+├── verticals/                     ← VERTICALES MÉTIER
+│   ├── trading/                   ← premier vertical (complet et fonctionnel)
+│   │   ├── api-core/
+│   │   ├── trading_algo/
+│   │   ├── web/
+│   │   └── agents/
+│   ├── lawyer/                    ← README (planifié)
+│   ├── doctor/                    ← README (planifié)
+│   ├── crm/                       ← README (planifié)
+│   └── cnesst/                    ← README (planifié, pilote)
+├── docs/
+│   ├── platform/
+│   └── verticals/
+│       ├── trading.md
+│       ├── lawyer.md
+│       ├── doctor.md
+│       ├── crm.md
+│       └── cnesst.md
+├── infra/docker/
+└── scripts/
+    ├── separate_platform.py       ← Phase 1
+    ├── separate_phase2.py         ← Phase 2
+    └── separate_phase3.py         ← Phase 3
+```
+
+## Règle de frontière (ADR-006 désormais appliqué)
+
+- **`services/*`** : aucune logique métier verticale. Ne connaît ni "AAPL", ni "portefeuille", ni "ordre".
+- **`verticals/*`** : logique métier, workflows, UI. N'implémente pas de routage LLM, de RAG ou de mémoire.
+- **`apps/web-platform/`** : UI de la plateforme (sélection verticale, admin, chat universel, RAG générique).
+
+## Corrections techniques intégrées
+
+- `verticals/trading/api-core/conftest.py` — ajout de `verticals/trading/` au `sys.path` pour pytest
+- `verticals/trading/api-core/app/main.py` — bootstrap `sys.path` avant les imports `app.*` (pour `trading_algo`)
+- `verticals/trading/api-core/app/core/config.py` — `env_file` absolu vers la racine du repo
+- `.env` racine — `POSTGRES_DSN` aligné sur le conteneur Docker (`lamoureux:changeme@localhost:5433/lamoureux`)
+
+## Dette à traiter dans une session dédiée
+
+- Rendre `trading_algo` installable (`pip install -e verticals/trading/trading_algo`) et supprimer le bootstrap `sys.path`
+- Rotation des clés API historiquement exposées (commits février 2026)
+- Parité UI HTML statique ↔ cockpit React
+
+---
+
+# 📦 Artefact 1/4 — `services/ai-gateway/` (scaffold fonctionnel)
+
+*(Contenu inchangé par rapport à la version précédente — voir section originale. Chemins `services/ai-gateway/` toujours valides.)*
+
+**Statut livré :** validation Phase 1 — 8/8 tests, `/health` 200, privacy `RESTRICTED → REMOTE` = 403.
+
+---
+
+# 📦 Artefact 2/4 — `infra/docker/docker-compose.yml`
+
+*(Contenu principal inchangé. **Note importante sur `api-core`** :)*
+
+Depuis la séparation, `api-core` a quitté `services/` pour `verticals/trading/api-core/`. Si vous voulez le dockeriser plus tard, adaptez la section `api-core` du compose :
+
+```yaml
+  # ─────────────────────────────── API Core (vertical trading) ───────────
+  api-core:
+    build:
+      context: ../..
+      dockerfile: verticals/trading/api-core/Dockerfile   # ← chemin mis à jour
+    container_name: lamoureux-api-core
+    environment:
+      POSTGRES_DSN: postgresql+psycopg://lamoureux:${POSTGRES_PASSWORD:-changeme}@postgres:5432/lamoureux
+      REDIS_URL: redis://redis:6379/0
+      AI_GATEWAY_URL: http://ai-gateway:8001
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-gateway:
+        condition: service_started
+    profiles: ["full"]
+```
+
+⚠️ **En développement, `api-core` tourne hors Docker** (uvicorn sous Windows), avec `POSTGRES_DSN=…@localhost:5433/…`. Le profil `full` n'est utile que pour un déploiement entièrement dockerisé.
+
+**Note `.env` Docker** (`infra/docker/.env`) :
+```
+POSTGRES_PASSWORD=changeme
+OLLAMA_MODEL=llama3.2:3b
+```
+
+**Note healthcheck Qdrant** (point cosmétique identifié) — remplacer :
+```yaml
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+```
+par une version qui accepte le retour réel de Qdrant (`healthz check passed`), ou simplement retirer le healthcheck.
+
+---
+
+# 📦 Artefact 3/4 — 6 ADRs fondateurs
+
+*(Contenu inchangé. **ADR-006 est désormais appliqué**, plus seulement accepté : la séparation `services/` ↔ `verticals/` le rend vérifiable par l'arborescence.)*
+
+**Table ADR mise à jour :**
+
+| ADR | Titre | Statut |
+|---|---|---|
+| 001 | Local-first par défaut | Accepted |
+| 002 | AI Gateway point d'entrée unique | Accepted |
+| 003 | Classification avant routage | Accepted |
+| 004 | Mémoire multi-niveaux | Accepted (phase 3 en cours) |
+| 005 | Permissions agents | Accepted (phase 4 en cours) |
+| 006 | Frontière infrastructure / vertical | **Accepted + Appliqué** (2026-11-02) |
+
+---
+
+# 📦 Artefact 4/4 — Prompts Codex (mis à jour)
+
+Les prompts précédents référençaient `services/api-core` et `apps/web`. Ils sont mis à jour ci-dessous pour la nouvelle arborescence.
+
+## Prompt « Phase 0+ — Consolidation post-séparation »
+
+```text
+Lis AGENTS.md et validation-report.md (2026-11-02).
+
+Contexte : la séparation plateforme/verticales est livrée (commit 91b90c3,
+tag platform-v1.0-merged). L'infrastructure est dans services/, le premier
+vertical est dans verticals/trading/, le portail plateforme dans
+apps/web-platform/ (README seul).
+
+Tâche : consolider la séparation avant d'ouvrir de nouveaux chantiers.
+
+1. Créer verticals/trading/trading_algo/pyproject.toml (package installable).
+2. Créer verticals/trading/api-core/requirements.txt à jour si absent.
+3. Supprimer le bootstrap sys.path dans verticals/trading/api-core/app/main.py
+   ET remplacer par une dépendance editable documentée dans le README
+   (pip install -e verticals/trading/trading_algo).
+4. Mettre à jour verticals/trading/api-core/conftest.py pour ne plus
+   manipuler sys.path (laisser la résolution au package).
+5. Mettre à jour verticals/trading/api-core/app/core/config.py pour pointer
+   vers la racine du repo (déjà fait) — ajouter un test qui vérifie que
+   settings.postgres_dsn contient 'localhost:5433' quand lancé depuis le venv.
+6. Ajouter allowedDevOrigins: ['169.254.98.81', 'localhost'] dans
+   verticals/trading/web/next.config.mjs.
+7. Mettre à jour README.md racine : nouvelle arborescence, commandes
+   de démarrage (uvicorn depuis verticals/trading/api-core, npm run dev
+   depuis verticals/trading/web, etc.).
+
+Contraintes :
+- Aucune régression : pytest tests -q dans verticals/trading/api-core
+  doit rester à 37 passed.
+- Aucun changement de comportement API.
+- Ne pas toucher aux clés API ni au .env.
+
+Ouvre une PR intitulée "phase-0.1: consolidate separation".
+```
+
+## Prompt « Phase 1 — AI Gateway (inchangé) »
+
+*(Voir version précédente. Le scaffold `services/ai-gateway/` n'a pas bougé. 8/8 tests validés.)*
+
+## Prompt « Phase 2 — Knowledge Layer (inchangé) »
+
+*(Voir version précédente. `services/knowledge/` fonctionne ; smoke `/health` 200 confirmé après séparation.)*
+
+## Prompt « Phase 3 — Memory Layer (inchangé) »
+
+*(Voir version précédente.)*
+
+## Prompt « Phase 4 — Orchestrator (inchangé) »
+
+*(Voir version précédente.)*
+
+## Prompt « Phase 5 — Model Registry (inchangé) »
+
+*(Voir version précédente.)*
+
+## Prompt « Phase 6 — Evaluation (inchangé) »
+
+*(Voir version précédente.)*
+
+## Prompt « Phase 7 à 9 — Self-Improvement (inchangés) »
+
+*(Voir versions précédentes.)*
+
+## Prompt « Phase 10 — Investment Agent (mis à jour pour `verticals/`) »
+
+```text
+Lis AGENTS.md.
+
+Tâche : Phase 10 — Investment Agent.
+
+Contexte : le vertical trading est désormais dans verticals/trading/.
+L'API institutionnelle est dans verticals/trading/api-core/.
+
+1. Créer services/orchestrator/app/agents/investment.py.
+2. Intégrer l'agent à verticals/trading/api-core (routes /api/v1/trading).
+3. Chaque ordre stagé crée un record Decision Memory :
+   - decision (BUY/SELL/HOLD)
+   - reason
+   - evidence (RAG sources via services/knowledge)
+   - action
+   - outcome (NULL au départ)
+4. Pre-trade checks institutionnels :
+   - restricted list
+   - liquidité
+   - turnover max
+   - concentration
+5. Pro-forma blotter avant staging.
+
+Contraintes :
+- Aucun ordre live.
+- Idempotency-Key obligatoire.
+- Classification HIGHLY_CONFIDENTIAL minimum.
+- Decision Memory append-only.
+- L'agent n'est PAS dans verticals/ (il est dans services/orchestrator/),
+  mais il appelle les routes du vertical via HTTP (pas d'import direct).
+
+Ouvre une PR intitulée "phase-10: investment-agent".
+```
+
+## Prompt « Phase 11 — Health Workspace (mis à jour) »
+
+```text
+Lis AGENTS.md.
+
+Tâche : Phase 11 — Health Workspace.
+
+Workspace strictement isolé : tenant dédié, isolation logique des données.
+
+1. services/knowledge/workspaces/health/ : configuration isolation.
+2. Ingestion documents médicaux → classification RESTRICTED obligatoire.
+3. Classification des niveaux de preuve :
+   FACT / SOURCE / INTERPRETATION / HYPOTHESIS / UNCERTAINTY.
+4. Timeline des événements médicaux.
+5. Détection de contradictions (signalement, pas résolution).
+
+Règles :
+- Aucune donnée santé ne sort du workspace.
+- RESTRICTED → LOCAL only, sans exception.
+- Aucune donnée santé ne peut être utilisée pour fine-tuning sans validation.
+- Nouveau vertical : créer verticals/doctor/ (et non dans services/).
+
+Ouvre une PR intitulée "phase-11: health-workspace".
+```
+
+## Prompt « Phase 12 — Distributed GPU (inchangé) »
+
+*(Voir version précédente.)*
+
+## Nouveau prompt « Phase 13 — `apps/web-platform` »
+
+```text
+Lis AGENTS.md et le README de apps/web-platform/.
+
+Tâche : Phase 13 — Portail plateforme.
+
+apps/web-platform/ ne contient qu'un README. Créer le portail complet.
+
+1. Scaffold Next.js 15 dans apps/web-platform/ (app router).
+2. Pages :
+   - /                → landing + sélection verticale (trading, lawyer, doctor, crm, cnesst)
+   - /search          → RAG générique (appel services/knowledge)
+   - /agents          → gestion des agents (appel services/orchestrator)
+   - /models          → model registry (appel services/model-registry)
+   - /admin           → admin plateforme
+3. Lib API : apps/web-platform/lib/api.ts qui appelle les services/ via URL configurable.
+4. Sidebar cohérente avec le cockpit trading (mais branding plateforme).
+5. Le lien vers verticals/trading/web doit ouvrir http://localhost:3000.
+
+Contraintes :
+- Aucune logique métier trading.
+- Aucun import de verticals/trading/.
+- Les services/ sont appelés via HTTP (pas d'import Python).
+- allowedDevOrigins configuré pour 169.254.98.81 + localhost.
+
+Ouvre une PR intitulée "phase-13: web-platform".
+```
+
+## Nouveau prompt « Phase 14 — Vertical CNESST (pilote) »
+
+```text
+Lis AGENTS.md et docs/verticals/cnesst.md.
+
+Tâche : Phase 14 — Vertical CNESST (pilote de réutilisabilité).
+
+Objectif : démontrer qu'un deuxième vertical peut être ajouté en réutilisant
+l'infrastructure sans la modifier.
+
+1. verticals/cnesst/api-core/ : FastAPI minimal
+   - /health
+   - /api/v1/cnesst/documents (ingestion)
+   - /api/v1/cnesst/query (RAG via services/knowledge)
+2. verticals/cnesst/web/ : Next.js minimal
+   - /               → landing
+   - /documents      → liste
+   - /query          → recherche RAG
+3. Ingestion de documents CNESST (formulaires, guides) via services/knowledge.
+   Classification : CONFIDENTIAL (documents administratifs).
+4. Tests : pytest dans verticals/cnesst/api-core, minimum 5 tests.
+5. Lien depuis apps/web-platform/ : la carte "CNESST" doit ouvrir ce vertical.
+
+Contraintes :
+- Aucune modification de services/ (si besoin, ouvrir un ADR).
+- Classification CONFIDENTIAL → LOCAL or LOCAL_GPU seulement.
+- Réutiliser le RAG existant, ne pas réimplémenter.
+
+Ouvre une PR intitulée "phase-14: cnesst-vertical".
+```
+
+---
+
+# ✅ Résumé de la livraison
+
+| # | Artefact | Statut | Utilité immédiate |
+|---|---|---|---|
+| 0 | Séparation plateforme/verticales | ✅ **Livrée et publiée** | Base propre pour tout le reste |
+| 1 | `services/ai-gateway/` | ✅ Fonctionnel (Phase 1 validée) | Débloque tous les appels LLM |
+| 2 | `infra/docker/docker-compose.yml` | ✅ Fonctionnel | Stack locale en 1 commande |
+| 3 | 6 ADRs fondateurs | ✅ Complets | Gouvernance posée, ADR-006 désormais appliqué |
+| 4 | Prompts Codex | ✅ Mis à jour | 15 phases pilotées (0.1 → 14) |
+
+## Démarrage actuel (post-séparation)
+
+```powershell
+# 1. Stack Docker (déjà up)
+docker ps
+# 5 conteneurs Lamoureux
+
+# 2. Services applicatifs (3 terminaux)
+cd C:\Users\marc\source\projet_trading\services\knowledge
+uvicorn app.main:app --host 0.0.0.0 --port 8002
+
+cd C:\Users\marc\source\projet_trading\verticals\trading\api-core
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+cd C:\Users\marc\source\projet_trading\verticals\trading\web
+npm run dev
+
+# 3. Smoke tests
+curl.exe http://localhost:8002/health
+curl.exe http://localhost:8000/api/v1/terminal/snapshot
+# Navigateur : http://localhost:3000/research
+```
+
+## Prochaine action recommandée
+
+1. **Prompt Codex « Phase 0.1 — Consolidation »** (rendre `trading_algo` installable, retirer les bootstraps `sys.path`, corriger `allowedDevOrigins`, mettre à jour le README racine).
+2. **Rotation des clés API** (indépendant de Codex) — les clés de février 2026 sont dans l'historique public.
+3. **Prompt Codex « Phase 13 — web-platform »** dès que la consolidation est mergée.
+```
+
+---
+
+## Différences clés vs. la version précédente
+
+1. **Nouvelle section 0** en tête : la séparation est un artefact livré, pas une intention.
+2. **Chemins mis à jour** partout : `services/api-core` → `verticals/trading/api-core`, `apps/web` → `verticals/trading/web`.
+3. **ADR-006 passe de « Accepted » à « Accepted + Appliqué »** — c'est ce que cette session a rendu vrai.
+4. **Prompts Codex réalignés** : Phase 10, 11 mentionnent `verticals/` ; ajout de Phase 0.1 (consolidation), Phase 13 (`web-platform`), Phase 14 (CNESST).
+5. **Validation report** : incidents résolus documentés, audit Git, dette technique identifiée.
+
+Si vous voulez, je peux aussi produire un **`docs/verticals/trading.md`** mis à jour (spec du vertical trading) ou un **`docs/platform/README.md`** qui décrit la frontière plateforme/verticales avec les règles concrètes (quels imports sont interdits dans `services/`).
